@@ -1,0 +1,40 @@
+#!/usr/bin/with-contenv bash
+# svc-de/run - the desktop-session longrun, overridden from the base image.
+#
+# Why this file exists at all. The base run script is
+#
+#     #!/usr/bin/with-contenv bash
+#     cd $HOME
+#     exec s6-setuidgid abc /bin/bash /defaults/startwm.sh
+#
+# which is *almost* right, and the difference is the whole bug:
+#   * with-contenv injects DISPLAY verbatim from the image env, and the base
+#     writes it WITH a trailing newline. Xlib then parses display number "1\n"
+#     and refuses the display. The previous webtop layer lost its tint2 panel to
+#     exactly this (crash-loop under s6, fine when run by hand).
+#   * the session entry is /defaults/startwm.sh - OUR copy, which normalises
+#     DISPLAY again, waits for X, publishes _WT_KASM_DESKTOP_ID /
+#     _WT_KASM_GENERATION on the root window and only then execs openbox-session.
+#     X readiness and the ownership handshake live there, not in this file: this
+#     unit's job is to hand a clean environment to that script and stay attached
+#     to it (exec), so s6 tracks the session and restarts it when openbox exits.
+#   * the graph edge (see s6-apply.sh) is svc-kasmvnc, not svc-nginx: with
+#     svc-kclient removed there is nothing in nginx that gates X, and starting
+#     the DE before the X server exists is how you get a crash-loop.
+#
+# No chown / no env-file publishing here: those are root actions and this script
+# drops to abc immediately. They live in init-wtk-appshare.
+set -eu
+
+# Normalise DISPLAY before the session inherits it (trailing CR/LF from the
+# image env, and never empty - an empty DISPLAY makes startwm exit 1 loudly
+# rather than hang in the X connect loop).
+D="$(printf '%s' "${DISPLAY:-:1}" | tr -d '\r\n')"
+export DISPLAY="$D"
+
+# HOME is the webtop persistence dir (/config). It is abc-owned; the base
+# session expects the XDG dirs under it, so pass it through unchanged.
+cd "${HOME:-/config}"
+
+# exec, not a subshell: s6-supervise must own the session process directly.
+exec s6-setuidgid abc /bin/bash /defaults/startwm.sh

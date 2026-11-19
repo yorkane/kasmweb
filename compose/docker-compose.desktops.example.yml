@@ -1,0 +1,117 @@
+# kasmweb three-desktop example - the multi-desktop channel shape the manager
+# (scripts/wt-kasm) automates: three independent single-container desktops, each
+# with its own compose project name, its own config + appshare volumes, and its
+# own loopback port. This file is an EXAMPLE of that topology, meant to be
+# copied and adapted (project name, ports, volume roots).
+#
+# Topology contract (identical per desktop):
+#   dispatcher/authz (public TLS entry) -> 127.0.0.1:<host port> -> container
+#   :3000 (nginx) -> { Xvnc httpd 127.0.0.1:6901, audio relay 127.0.0.1:4901 }.
+#   KasmVNC is single-session-shared (-AlwaysShared), so one container = one
+#   desktop; concurrency across desktops = more containers, never more sockets
+#   in one container.
+#
+# WTK_BASE_PATH is the per-desktop URL prefix under which the entry surface
+# (dispatcher / reverse proxy) mounts the desktop. It is forwarded verbatim to
+# the in-container vhost renderer, which rewrites page paths and injects the
+# audio front-end under that prefix; the prefix must match the proxy route
+# exactly (here /desktop/<id>/), and WTK_PUBLIC_ORIGIN must be the origin the
+# browser sees (the audio relay checks Host + WS Origin against it).
+#
+# The appshare bind is NOT optional: svc-kasmvnc fails closed without
+# /run/wt-kasm-app, and it is also where the launch/credential contract lives
+# for the manager. Widen the X11 bind only if a host X client attaches.
+#
+# Image: every service below uses the published default
+# ghcr.io/yorkane/kasmweb:latest. Pin an immutable digest (or, on an offline
+# dev box, a locally built tag such as kasmweb:local-verify from
+# docker/Dockerfile) by editing image: per service.
+#
+# Usage:
+#   cp docker-compose.desktops.example.yml docker-compose.desktops.yml  # edit
+#   docker compose -f docker-compose.desktops.yml up -d
+#   docker compose -f docker-compose.desktops.yml ps
+services:
+  chrome-1:
+    image: ghcr.io/yorkane/kasmweb:latest
+    container_name: wt-kasm-chrome-1
+    hostname: wt-kasm-chrome-1
+    restart: unless-stopped
+    network_mode: bridge
+    shm_size: 1g
+    ports:
+      - "127.0.0.1:25321:3000"
+    tmpfs:
+      - /tmp
+    environment: &kasm-chrome-env
+      WT_KASM_DESKTOP_ID: chrome-1
+      WTK_DESKTOP_ID: chrome-1
+      WTK_BASE_PATH: /desktop/chrome-1/
+      WTK_WIDTH: "1600"
+      WTK_HEIGHT: "900"
+      WTK_FRAMERATE: "30"
+      WTK_PUBLIC_ORIGIN: http://127.0.0.1:25321
+      PUID: "1000"
+      PGID: "1000"
+      DISPLAY: ":1"
+      START_DOCKER: "false"
+    volumes:
+      - ./data/chrome-1/config:/config
+      - ./data/chrome-1/appshare:/run/wt-kasm-app
+      - ./data/chrome-1/x11:/tmp/.X11-unix
+    labels:
+      kasmweb.managed: "example"
+      kasmweb.route: kasmweb
+      kasmweb.desktop: chrome-1
+
+  chrome-2:
+    image: ghcr.io/yorkane/kasmweb:latest
+    container_name: wt-kasm-chrome-2
+    hostname: wt-kasm-chrome-2
+    restart: unless-stopped
+    network_mode: bridge
+    shm_size: 1g
+    ports:
+      - "127.0.0.1:25322:3000"
+    tmpfs:
+      - /tmp
+    environment:
+      <<: *kasm-chrome-env
+      WT_KASM_DESKTOP_ID: chrome-2
+      WTK_DESKTOP_ID: chrome-2
+      WTK_BASE_PATH: /desktop/chrome-2/
+      WTK_PUBLIC_ORIGIN: http://127.0.0.1:25322
+    volumes:
+      - ./data/chrome-2/config:/config
+      - ./data/chrome-2/appshare:/run/wt-kasm-app
+      - ./data/chrome-2/x11:/tmp/.X11-unix
+    labels:
+      kasmweb.managed: "example"
+      kasmweb.route: kasmweb
+      kasmweb.desktop: chrome-2
+
+  chrome-3:
+    image: ghcr.io/yorkane/kasmweb:latest
+    container_name: wt-kasm-chrome-3
+    hostname: wt-kasm-chrome-3
+    restart: unless-stopped
+    network_mode: bridge
+    shm_size: 1g
+    ports:
+      - "127.0.0.1:25323:3000"
+    tmpfs:
+      - /tmp
+    environment:
+      <<: *kasm-chrome-env
+      WT_KASM_DESKTOP_ID: chrome-3
+      WTK_DESKTOP_ID: chrome-3
+      WTK_BASE_PATH: /desktop/chrome-3/
+      WTK_PUBLIC_ORIGIN: http://127.0.0.1:25323
+    volumes:
+      - ./data/chrome-3/config:/config
+      - ./data/chrome-3/appshare:/run/wt-kasm-app
+      - ./data/chrome-3/x11:/tmp/.X11-unix
+    labels:
+      kasmweb.managed: "example"
+      kasmweb.route: kasmweb
+      kasmweb.desktop: chrome-3

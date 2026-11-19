@@ -1,0 +1,115 @@
+name: publish
+
+# Build and push ghcr.io/yorkane/kasmweb.
+#
+# Triggers:
+#   - push tag v*        -> semver labels (version / major.minor / major) + tag + sha
+#   - push main          -> latest + main + sha, ONLY while HEAD carries no v* tag
+#                           (a tag run is the publisher for that commit; the gate
+#                           step below skips the branch build when HEAD is tagged)
+#   - workflow_dispatch  -> tag from the inputs.tag value (default: latest)
+#
+# docker/Dockerfile pins its base via ARG WTK_BASE, default
+# ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d
+# pulled online in CI. The offline dev-box alias webtop-kasmvnc-base:alpine317-527bb89e
+# is deliberately NOT used here.
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to publish
+        required: false
+        default: latest
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Branch pushes only publish while no v* tag points at HEAD. ls-remote
+      # reports the peeled commit for annotated tags, so column 1 matches GITHUB_SHA.
+      - name: Gate - branch build only while HEAD has no v* tag
+        id: skiptag
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          hits=$(git -c "http.extraheader=AUTHORIZATION: bearer ${GH_TOKEN}" \
+            ls-remote origin 'refs/tags/v*' \
+            | awk -v s="${GITHUB_SHA}" '$1 == s { n++ } END { print n + 0 }')
+          if [ "${hits}" -gt 0 ]; then
+            echo "HEAD ${GITHUB_SHA} already carries a v* tag; the tag run publishes it"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "no v* tag on HEAD ${GITHUB_SHA}; branch build proceeds"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to ghcr.io
+        if: steps.skiptag.outputs.run != 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        if: steps.skiptag.outputs.run != 'false'
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push
+        id: build
+        if: steps.skiptag.outputs.run != 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile
+          push: true
+          # Load the produced image into the runner's local docker store so the
+          # layout self-check below can inspect it with docker save.
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image layout self-check (docker save, offline unpack)
+        if: steps.skiptag.outputs.run != 'false'
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tag=$(printf '%s\n' "${META_TAGS}" | sed -n '1p')
+          test -n "${tag}" || { echo "FATAL: metadata action produced no tags" >&2; exit 1; }
+          echo "verify target: ${tag}"
+          bash scripts/verify-image-layout.sh "${tag}"

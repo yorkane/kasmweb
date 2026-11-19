@@ -1,0 +1,15 @@
+# K 线镜像构建期安装包（Alpine v3.17 main+community，2026-11-13 apk info 实测存在）
+# 基座 a317 已带: nodejs ffmpeg pulseaudio openbox nginx python3 xauth xterm jq
+#                  netcat-openbsd mcookie procps shadow dbus-x11 font-noto(无CJK)
+# 逐包在构建日志与报告里记录实际版本（3.17 已 EOL，走 archive 仓库）
+tint2
+pcmanfm
+xdotool
+xwininfo
+xprop
+xsetroot
+scrot
+font-noto-cjk
+font-noto-emoji
+font-dejavu
+ttf-liberation

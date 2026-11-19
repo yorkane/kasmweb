@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bash
+# init-nginx - replaces the base oneshot. The base version copies /defaults/
+# default.conf, seds CUSTOM_PORT/CUSTOM_HTTPS_PORT into it, mints a self-signed
+# cert and uncomments an auth_basic block when PASSWORD is set.
+#
+# None of that is legal here: authn/authz belongs to the authz gateway, public
+# TLS termination is APISIX, and two sed -i passes over the live vhost is the
+# crash-loop shape we already got burned by. The renderer validates every value
+# and publishes with os.replace(), so a truncated vhost is impossible.
+set -eu
+exec /usr/bin/python3 /opt/wtk/nginx/render-nginx.py

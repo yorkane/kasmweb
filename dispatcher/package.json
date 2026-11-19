@@ -1,0 +1,8 @@
+{
+  "name": "wt-kasm-dispatcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "KasmVNC (K line) loopback single-entry dispatcher: ?desktop= selector + fixed prefix HTTP/WS reverse proxy. No auth (authz owns it), no container management.",
+  "license": "MIT"
+}

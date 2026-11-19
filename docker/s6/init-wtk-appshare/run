@@ -1,0 +1,102 @@
+#!/usr/bin/with-contenv bash
+# init-wtk-appshare - publish the desktop's X11 + PulseAudio credentials on
+# the shared volume (/run/wt-kasm-app, bind from the host desk dir) and
+# write app.json.
+#
+# Contract (read by manager/appshare.py):
+#   native         pulse native socket, bound by svc-pulseaudio via drop-in
+#   pulse-cookie   server cookie, 0640 abc:$PGID
+#   xauth          Xauthority, one Wildcard(0xffff) entry, 0640 abc:$PGID
+#   generation     written by svc-kasmvnc on EVERY Xvnc start, not once/boot
+#   app.json       pure-data desktop description (this script)
+#   launch.sock    created by the MANAGER; wtk-launch is the only in-image client
+#
+# Group model (root ruling 2026-11-13): the shared group is **the numeric
+# PGID (compose passes 1000)**, NOT the name users. abc's primary group is
+# 1001 and /etc/group says users:1000:games,abc - names lie, gid does not.
+# chown abc:"$PGID" + chmod 2770/0640 means: root, abc, and any process
+# running with gid $PGID (the host aigc uid 1000, app containers) can read
+# the credentials; nginx(102)/messagebus(101) cannot.
+#
+# /run/wt-kasm-app is NOT tmpfs here: it is the host bind, so the directory
+# exists before /init runs, arrives root:root (host dir) and is re-chowned
+# every boot. Fail-closed: a missing credential aborts the oneshot, s6-rc
+# never reaches the display, and there is no unauthenticated desktop
+# behind a green healthcheck.
+set -eu
+
+SHARE="${WTK_APPSHARE:-/run/wt-kasm-app}"
+GID_NUM="${PGID:-1000}"
+case "$GID_NUM" in (*[!0-9]*|'') GID_NUM=1000;; esac
+export HOME=/config
+
+say() { echo "wtk-appshare: $*"; }
+die() { echo "wtk-appshare: FATAL: $*" >&2; exit 1; }
+
+DISPLAY_N=$(printf '%s' "$DISPLAY" | tr -d '\r\n')
+[ -n "$DISPLAY_N" ] || die "DISPLAY empty"
+printf '%s' "$DISPLAY_N" > /run/s6/container_environment/DISPLAY
+export DISPLAY="$DISPLAY_N"
+DISP_NO="${DISPLAY_N#:}"
+case "$DISP_NO" in (*[!0-9]*|'') die "DISPLAY=$DISPLAY_N has no numeric display";; esac
+
+[ -d "$SHARE" ] || die "shared dir $SHARE is not mounted (compose volume missing)"
+chown "abc:$GID_NUM" "$SHARE" || die "cannot chown $SHARE to abc:$GID_NUM"
+chmod 2770 "$SHARE" || say "WARN: chmod $SHARE refused"
+say "share dir ready: $SHARE (2770 abc:$GID_NUM)"
+
+chown abc:abc /config
+install -d -m 0700 -o abc -g abc /config/.cache
+
+# ---- X11 authorization ------------------------------------------------------
+XAUTH="$SHARE/xauth"
+[ -e "$XAUTH" ] || : > "$XAUTH" || die "cannot create $XAUTH"
+chown "abc:$GID_NUM" "$XAUTH"; chmod 0640 "$XAUTH"
+# xauth 1.1.3 here has no nadd, and `add :1 .` writes a family-Local entry
+# pinned to this hostname, which a client on the far side of the shared
+# socket cannot present. wtk-xauth-seed writes the Wildcard(0xffff) entry
+# directly and preserves entries Xvnc appends later.
+cookie=$(s6-setuidgid abc /opt/wtk/bin/wtk-xauth-seed "$XAUTH" "$DISP_NO")
+[ -n "$cookie" ] || die "xauth seeding produced no cookie"
+blob=$(od -An -tx1 -v "$XAUTH" | tr -d ' \n')
+case "$blob" in *"$cookie"*) : ;; *) die "xauth seed missing from $XAUTH" ;; esac
+printf '%s' "$XAUTH" > /run/s6/container_environment/XAUTHORITY
+say "xauth ready: $XAUTH (0640 abc:$GID_NUM), wildcard entry for display $DISP_NO"
+
+# ---- X socket directory (bind-mounted from host) ----------------------------
+install -d -m 1770 -o abc -g "$GID_NUM" /tmp/.X11-unix
+
+# ---- PulseAudio -------------------------------------------------------------
+# The daemon (svc-pulseaudio, abc, HOME=/config) would default its cookie to
+# /config/.config/pulse/cookie. We pin it to a freshly generated file under
+# /run/pulse (image-layer dir, abc 0700) via the PULSE_COOKIE env that
+# svc-pulseaudio and the relay share, and publish a copy on the volume.
+# Generating it HERE (not reading one the daemon made) is what guarantees
+# $SHARE/pulse-cookie can never desynchronise from the live server.
+install -d -m 0700 /run/pulse; chown abc:abc /run/pulse; chmod 0700 /run/pulse
+install -d -m 0700 /run/pulse/.config/pulse
+chown -R abc:abc /run/pulse/.config; chmod 0700 /run/pulse/.config /run/pulse/.config/pulse
+PCOOKIE=/run/pulse/.config/pulse/cookie
+if [ ! -s "$PCOOKIE" ]; then
+  tmp="/run/pulse/.cookie.$$"
+  s6-setuidgid abc sh -c "head -c 256 /dev/urandom > '$tmp' && chmod 0600 '$tmp'" || die "cannot generate pulse cookie"
+  mv -f "$tmp" "$PCOOKIE" || die "cannot install pulse cookie"
+fi
+chown abc:abc "$PCOOKIE"; chmod 0600 "$PCOOKIE"
+install -m 0640 -o abc -g "$GID_NUM" "$PCOOKIE" "$SHARE/pulse-cookie"
+say "pulse cookie published: $SHARE/pulse-cookie (0640 abc:$GID_NUM) from $PCOOKIE"
+
+printf '%s' "$PCOOKIE" > /run/s6/container_environment/PULSE_COOKIE
+printf '%s' "unix:$SHARE/native" > /run/s6/container_environment/PULSE_SERVER
+printf '%s' "/run/pulse" > /run/s6/container_environment/PULSE_RUNTIME_PATH
+export PULSE_COOKIE="$PCOOKIE" PULSE_SERVER="unix:$SHARE/native" PULSE_RUNTIME_PATH=/run/pulse
+
+# ---- app.json (pure data; no command, no argv, no url) ----------------------
+W=${WTK_WIDTH:-1600}; H=${WTK_HEIGHT:-900}; F=${WTK_FRAMERATE:-30}
+ID="${WTK_DESKTOP_ID:-probe}"
+tmp="$SHARE/.app.json.$$"
+printf '{"schema":1,"desktopId":"%s","display":"%s","width":%s,"height":%s,"framerate":%s,"appIds":["chrome","vcmi"]}\n' \
+  "$ID" "$DISPLAY_N" "$W" "$H" "$F" > "$tmp" || die "cannot write app.json"
+mv -f "$tmp" "$SHARE/app.json"
+chmod 0644 "$SHARE/app.json"
+say "app.json written; contract ready at $SHARE"

@@ -1,0 +1,73 @@
+kasmweb
+Copyright 2026 The kasmweb Authors
+
+This product bundles software from third parties. Third-party notices:
+
+-------------------------------------------------------------------------------
+1. Chromium product logo (desktop icon)
+   File: docker/windowing/desktop/icons/chrome.png
+   Source: the Chromium Project's official open-source product logo,
+     chrome/app/theme/chromium/product_logo_256.png
+   Repository: https://chromium.googlesource.com/chromium/src/
+   Pinned revision (immutable commit SHA, branch-heads/1243 line, NOT a
+   floating branch reference):
+     3fc25359f5b00311613c8e581f6f2e288cd684c4
+   Fetched via the gitiles blob endpoint:
+     https://chromium.googlesource.com/chromium/src/+/<revision>/chrome/app/theme/chromium/product_logo_256.png?format=TEXT
+     (base64 transport encoding stripped; the decoded payload below is the PNG)
+   SHA256 of the shipped file:
+     b131e0fcc3760a5c99eff5b4c2c55fa2c2e8d4a11b0c70a0ea7a316562a4a250
+   Format: PNG image data, 256 x 256, 8-bit/color RGBA, non-interlaced
+     (verified with file(1); identical payload to the 2772-byte
+     product_logo_48.png shipped by Google Chrome for Testing 153.0.8010.12,
+     which is the same official Chromium product identity at 48px).
+   License: the Chromium source tree is BSD-3-Clause licensed (see
+     https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.127/LICENSE);
+     this artwork is part of that licensed tree.
+   Trademark note: "Chromium" is a trademark of the Chromium project / Google
+     LLC and "Chrome" is a trademark of Google LLC. Each belongs to its
+     respective owner. This repository ships the open-source Chromium product
+     logo strictly to label a Chrome/Chromium launcher icon and makes NO
+     trademark claim and NO endorsement, affiliation, or sponsorship claim.
+
+   Provenance fallback note: if the gitiles fetch above is unavailable to a
+   future rebuilder, the same official identity is available byte-identical at
+   Chrome for Testing's product_logo_48.png (48px; SHA256 of that 48px file:
+   42142312e7fa9221b8ad0790c1ecec86edd35468724ec103ec27e1125a43c8b2), and the
+   pinned-revision path above should be used first.
+
+-------------------------------------------------------------------------------
+2. jsmpeg (browser MP2 player used by the audio front-end)
+   Files: docker/audio/web/jsmpeg.min.js (vendored, minified bundle)
+          docker/audio/web/LICENSE-jsmpeg.txt (license text, kept in-package)
+   Copyright (c) 2017 Dominic Szablewski
+   License: MIT (see LICENSE-jsmpeg.txt inside the package).
+
+-------------------------------------------------------------------------------
+3. Base image
+   The final image is built FROM ghcr.io/linuxserver/baseimage-kasmvnc,
+   pinned by digest:
+     ARG WTK_BASE=ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d
+   (LinuxServer.io baseimage-kasmvnc, Alpine 3.17 line; KasmVNC engine and all
+   base-image components keep their own upstream licenses; KasmVNC itself is
+   Open-source under the GPL family as distributed by Kasm Technologies.)
+
+-------------------------------------------------------------------------------
+4. Downstream lineage
+   This image's content tree descends from the webtop-kasmvnc "K line"
+   project (image/native-default resize variant, audio chain, s6 graph,
+   windowing stack). That lineage is an internal authorship line of this
+   repository; all files are shipped here under the Apache License 2.0 of
+   this repository (LICENSE), except the third-party components listed above,
+   which keep their own licenses.
+
+-------------------------------------------------------------------------------
+5. ws (WebSocket library, vendored for the dispatcher test line; the in-image
+   audio relay resolves its ws module from the base image's
+   /kclient/node_modules/ws, never from this copy)
+   Directory: dispatcher/vendor/ws/ (unmodified copy of npm package ws 8.17.1:
+     LICENSE, README.md, package.json, index.js, browser.js, wrapper.mjs, lib/)
+   Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
+              (c) 2013 Arnout Kazemier and contributors
+              (c) 2016 Luigi Pinca and contributors
+   License: MIT (dispatcher/vendor/ws/LICENSE ships with the copy).

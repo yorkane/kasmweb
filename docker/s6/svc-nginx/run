@@ -1,0 +1,7 @@
+#!/usr/bin/with-contenv bash
+# svc-nginx - the base run script pkill's every process matching "nginx:"
+# before exec'ing. Inside one container that is a self-kill hammer and violates
+# the project's zero-pkill rule; the s6-supervised nginx has no peer to clean up.
+# Pure exec. Config rendering lives in init-nginx (override).
+set -u
+exec /usr/sbin/nginx -g 'daemon off;'

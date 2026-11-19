@@ -1,0 +1,188 @@
+/* Desktop-page chrome for the browser audio control (wdev webtop image).
+ *
+ * Served same-origin by the audio relay at /audiojs/page.css (relay.js maps
+ * .css -> text/css and serves anything under audio/web/), so it needs no nginx
+ * location and no CSP change: a <link rel=stylesheet> from the same origin
+ * satisfies style-src 'self'. audio.js loads it itself when the page does not
+ * already link it, which keeps the whole control inside the audio layer.
+ *
+ * Geometry contract, five custom properties set by audio.js through the CSSOM
+ * (element.style.setProperty). Empirically checked in Chromium 143 under
+ * `style-src 'self'` (see doc/webtop音频按钮布局-2026-11-13.md): a custom property
+ * written on an element's inline style IS consumed by an external same-origin
+ * stylesheet and triggers no CSP violation - CSP gates <style> elements and
+ * style attributes authored by script, not the CSSOM custom-property store.
+ * Serialization does create a style attribute, so the wording "no style
+ * attribute" would be wrong; the CSP-safe claim is "no inline style value, no
+ * <style> element": the attribute holds custom properties only.
+ *   --wdev-audio-bottom / --wdev-audio-right  offset from the viewport edges,
+ *       derived from the VNC canvas rect and the client scale, so the control
+ *       stays on the taskbar band even when the canvas is letterboxed
+ *       (resize=scale), a Kasm top bar shifts it, or the page scrolls.
+ *   --wdev-audio-bar     the taskbar band height in CSS px (30 * scale).
+ *   --wdev-audio-width / --wdev-audio-height  the control box, capped by the
+ *       blank zone the X-side clock leaves free at the right end of the band
+ *       (tint2 clock_padding = 44 0), so it can never cover the clock.
+ * The fallbacks below are only used before the first layout() pass.
+ * When no usable canvas exists (login page, KasmVNC not connected, session
+ * canvas not created yet) audio.js writes data-off=1 plus data-nocanvas=1 and
+ * removes all six custom properties, so the control is hidden rather than
+ * parked at the fallback offsets, and the geometry API reports null.
+ *
+ * The stylesheet is what makes the control out of flow, so audio.js keeps the
+ * element hidden (the hidden attribute, set before this sheet exists) until this
+ * file is applied, and leaves it hidden if the load fails. page.css has to honour
+ * that: the rules below give the base selector a display value that would
+ * otherwise beat the UA's [hidden] rule, so [hidden] is restated explicitly.
+ *
+ * The control is out of the document flow (position:fixed, margin:0): the
+ * earlier in-flow insertion at body.firstChild added 21px to the page height,
+ * which is what produced the browser scrollbar that hid the bottom of the
+ * taskbar. Contributing zero flow height is the whole point of this file.
+ */
+
+#wdev-audio-btn,
+[data-wdev-audio] {
+  position: fixed;
+  display: inline-flex;
+  z-index: 2147483000;
+  bottom: var(--wdev-audio-bottom, 2px);
+  right: var(--wdev-audio-right, 48px);
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  /* padding is part of the capped box (border-box), so it must be small: the
+     JS cap is min(zone, band) and the glyph is centred by flex, not padded. */
+  padding: 0;
+  height: var(--wdev-audio-height, 26px);
+  width: var(--wdev-audio-width, 26px);
+  max-width: var(--wdev-audio-width, 26px);
+  min-width: var(--wdev-audio-width, 26px);
+  font-family: system-ui, "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: 0;
+  color: #e8dcc0;
+  background: #1c1712eb;
+  border: 1px solid #c8a24a8c;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+/* Wide form (data-wdev-audio=wide, honoured only when JS proved the zone is
+   wide enough): a two-character caption sits next to the glyph. The compact
+   default is a single glyph so the control occludes as little of the remote
+   desktop as possible; the full caption always lives in title/aria-label.
+   The box stays square-capped by --wdev-audio-width; width:auto lets the
+   caption extend inside the zone the JS cap already sized. */
+[data-wdev-audio=wide] {
+  width: auto;
+  min-width: var(--wdev-audio-width, 26px);
+  max-width: var(--wdev-audio-maxw, 120px);
+  padding: 0 6px;
+  /* max-width alone is not a guarantee: the caption is one nowrap run inside a
+     flex box, and a flex item refuses to shrink below its content width, so a
+     caption wider than the ceiling is painted OUTSIDE the box - to the right,
+     over the clock the zone exists to keep free. The overflow is clipped at the
+     box edge instead; audio.js keeps the full caption in title/aria-label, so a
+     clipped label costs no information. No ellipsis is claimed here: text-
+     overflow does not apply to a flex container, and the anonymous box holding
+     the text cannot be targeted by a selector. */
+  overflow: hidden;
+}
+
+#wdev-audio-btn:hover,
+[data-wdev-audio]:hover {
+  color: #fff8e6;
+  border-color: #c8a24af2;
+  background: #261f18f5;
+}
+
+/* Keyboard focus has to be visible on a 26px glyph on a dark bar. */
+#wdev-audio-btn:focus-visible,
+[data-wdev-audio]:focus-visible {
+  outline: 2px solid #c8a24a;
+  outline-offset: 2px;
+}
+
+#wdev-audio-btn:active,
+[data-wdev-audio]:active {
+  transform: translateY(1px);
+}
+
+/* State-driven colour: the glyph carries the state, the colour confirms it for
+   colour-blind users the glyph alone would not (data-state is set by audio.js). */
+[data-wdev-audio][data-state=playing] {
+  color: #9fe0a6;
+  border-color: rgba(159, 224, 166, 0.75);
+}
+
+[data-wdev-audio][data-state=loading] {
+  color: #f0d79a;
+  cursor: progress;
+  opacity: 0.85;
+}
+
+[data-wdev-audio][data-state=stalled],
+[data-wdev-audio][data-state=failed] {
+  color: #e8927c;
+  border-color: rgba(232, 146, 124, 0.8);
+}
+
+[data-wdev-audio][data-state=idle],
+[data-wdev-audio][data-state=stopped] {
+  opacity: 0.92;
+}
+
+/* Non-button presets (a plain <div> placed by the shell) need the button
+   affordances that a <button> gets for free. */
+div[data-wdev-audio] {
+  cursor: pointer;
+}
+
+/* A display that is too short to show the taskbar band: hide the control rather
+   than float it in the middle of the game view. audio.js sets data-off=1 when
+   the computed bottom offset would fall outside the viewport. */
+[data-wdev-audio][data-off="1"] {
+  display: none;
+}
+
+/* The taskbar band is thinner than a usable click target (small client scale):
+   audio.js sets data-small=1, and the control is skipped rather than painted
+   over the desktop. data-off=1 is set in the same pass, so hiding already
+   happens; this rule keeps the reason readable on its own. */
+[data-wdev-audio][data-small="1"] {
+  display: none;
+}
+
+/* The whole taskbar band lies below the viewport (resize=off with a canvas
+   larger than the window and no CSS shell to fit it): audio.js sets
+   data-bandout=1 together with data-off=1. Clamping the offset to the viewport
+   floor would park the control in the middle of the game image, so it is hidden
+   instead. This rule keeps the reason readable on its own. */
+[data-wdev-audio][data-bandout="1"] {
+  display: none;
+}
+
+/* Fail-closed reveal: beats the display above, which has higher specificity
+   than the UA's [hidden] rule. */
+[data-wdev-audio][hidden] {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #wdev-audio-btn,
+  [data-wdev-audio] {
+    transform: none !important;
+    transition: none !important;
+  }
+}

@@ -1,0 +1,29 @@
+# Context = docker/ (the published contract: docker build -f docker/Dockerfile docker).
+# Deny-all baseline, then allow ONLY the content layers the Dockerfile COPYs:
+# a stray file (notes, scratch PNGs, editor backups) can never reach an image
+# layer - the allowlist IS the manifest. Patterns are unquoted (quotes are
+# literal characters in .dockerignore and would match nothing).
+*
+!apk/
+!apk/packages.txt
+!audio/
+!audio/README.md
+!audio/relay.js
+!audio/web/
+!audio/web/LICENSE-jsmpeg.txt
+!audio/web/audio.js
+!audio/web/jsmpeg.min.js
+!audio/web/layout.css
+!audio/web/layout.js
+!audio/web/page.css
+!bin/
+!bin/wtk-launch
+!bin/wtk-xauth-seed
+!healthcheck.sh
+!nginx/
+!nginx/render-nginx.py
+!nginx/wtk.conf.template
+!pulse/
+!pulse/20-wtk-app-share.pa
+!s6/
+!windowing/

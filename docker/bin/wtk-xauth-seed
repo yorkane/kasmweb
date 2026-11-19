@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Seed one Wildcard-family (0xffff) MIT-MAGIC-COOKIE-1 entry into an Xauthority
+file and print the cookie hex on stdout.
+
+Why not `xauth add` (the image ships xauth 1.1.3, no `nadd`): `xauth add :1 .`
+writes a family-Local entry pinned to the *server container's* hostname, so a
+client in another container (different hostname) is refused. A Wildcard entry
+matches any address, which is what makes one cookie usable by the desktop
+session and by app containers on the other side of the shared socket.
+
+File layout (Xauthority, big-endian):
+  uint32 file version 0x00000100
+  per entry: uint16 family, uint16 addrlen + addr, uint16 display,
+             uint16 authname len + authname, uint16 authdata len + authdata
+Existing entries are preserved: the file is parsed, the wildcard entry for the
+given display is replaced (or appended), and the result is written atomically.
+"""
+import os
+import struct
+import sys
+import tempfile
+
+
+def read_entries(path):
+    with open(path, "rb") as fh:
+        blob = fh.read()
+    if not blob:
+        return []
+    if len(blob) < 4:
+        raise ValueError("truncated xauth header")
+    ver, = struct.unpack_from(">I", blob, 0)
+    if ver != 0x00000100:
+        raise ValueError("unsupported xauth file version 0x%08x" % ver)
+    out = []
+    off = 4
+    n = len(blob)
+    while off < n:
+        (fam,) = struct.unpack_from(">H", blob, off); off += 2
+        (alen,) = struct.unpack_from(">H", blob, off); off += 2
+        addr = blob[off:off + alen]; off += alen
+        (disp,) = struct.unpack_from(">H", blob, off); off += 2
+        (nlen,) = struct.unpack_from(">H", blob, off); off += 2
+        name = blob[off:off + nlen]; off += nlen
+        (dlen,) = struct.unpack_from(">H", blob, off); off += 2
+        data = blob[off:off + dlen]; off += dlen
+        out.append((fam, addr, disp, name, data))
+    return out
+
+
+def write_entries(path, entries):
+    blob = struct.pack(">I", 0x00000100)
+    for fam, addr, disp, name, data in entries:
+        blob += struct.pack(">H", fam) + struct.pack(">H", len(addr)) + addr
+        blob += struct.pack(">H", disp)
+        blob += struct.pack(">H", len(name)) + name
+        blob += struct.pack(">H", len(data)) + data
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".wtk-xauth.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(blob)
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def main(argv):
+    if len(argv) != 3:
+        sys.stderr.write("usage: wtk-xauth-seed FILE DISPLAYNUMBER\n")
+        return 2
+    path, disp = argv[1], int(argv[2])
+    cookie = os.urandom(16)
+    entries = read_entries(path) if os.path.getsize(path) > 0 else []
+    wild = (0xFFFF, b"", disp, b".", cookie)
+    entries = [e for e in entries
+               if not (e[0] == 0xFFFF and e[2] == disp and e[3] == b".")]
+    entries.append(wild)
+    write_entries(path, entries)
+    sys.stdout.write(cookie.hex() + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

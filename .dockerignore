@@ -1,0 +1,5 @@
+# The supported build context is docker/ (see docker/.dockerignore); the
+# Dockerfile's COPY paths are relative to that directory. This root-level
+# deny-all makes an accidental root-context build FAIL LOUD at the first COPY
+# instead of silently shipping a partial context.
+*

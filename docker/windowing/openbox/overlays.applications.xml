@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- openbox applications overlay for the webtop-kasmvnc image.
+     Appended by build-rc.sh at the END of the stock rc's <applications> section,
+     where later rules win, so the wildcard below overrides any decor=no injected
+     by the base image. Self-contained: no <include>, no dependency on /etc/xdg.
+
+     1) class="*" decor=yes restores titlebars for every ordinary app, which is
+        what makes windows draggable and minimizable inside the VNC canvas.
+     2) Chrome/Chromium windows get a NORMAL Openbox titlebar (decor=yes) and
+        start unmaximised (maximized=no). Root ruling 2026-11-13: this product
+        ships plain host Chrome, not the old wdev kiosk, so the inherited
+        family-wide decor=no exception is removed. maximized=no stays: the
+        2026-10-15 black-screen fix (forced-maximised GLX surface) is
+        geometry-related and orthogonal to decorations.
+     3) Dock/desktop/splash/utility stay undecorated and unfocused.
+     4) vcmiclient: VCMI is a game client that sizes its own window from the
+        display geometry, so it gets a forced centre placement and is raised
+        when it maps. Deliberately no <maximized> here: forcing a game client
+        maximized is exactly the class of change that black-screened Chromium,
+        and the game's own resolution menu is the right control.
+-->
+  <application class="*">
+    <decor>yes</decor>
+  </application>
+  <application class="Chrome">
+    <decor>yes</decor>
+    <maximized>no</maximized>
+    <focus>yes</focus>
+  </application>
+  <application class="Google-chrome">
+    <decor>yes</decor>
+    <maximized>no</maximized>
+    <focus>yes</focus>
+  </application>
+  <application class="chromium-browser">
+    <decor>yes</decor>
+    <maximized>no</maximized>
+  </application>
+  <application class="Chromium">
+    <decor>yes</decor>
+    <maximized>no</maximized>
+    <focus>yes</focus>
+  </application>
+  <application class="vcmiclient">
+    <decor>yes</decor>
+    <focus>yes</focus>
+    <position force="yes"><center/></position>
+  </application>
+  <application type="dock">
+    <decor>no</decor>
+    <focus>no</focus>
+    <layer>above</layer>
+  </application>
+  <application type="desktop">
+    <decor>no</decor>
+    <focus>no</focus>
+    <layer>below</layer>
+  </application>
+  <application type="splash">
+    <decor>no</decor>
+    <focus>no</focus>
+  </application>
+  <application name="polybar" type="utility">
+    <decor>no</decor>
+    <focus>no</focus>
+  </application>
+  <application name="wtk-taskbar" type="dock">
+    <decor>no</decor>
+    <focus>no</focus>
+    <layer>above</layer>
+    <position><x>0</x><y>0</y></position>
+  </application>
+

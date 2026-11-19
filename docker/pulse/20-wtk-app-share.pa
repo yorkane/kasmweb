@@ -1,0 +1,45 @@
+# wtk app-share pulse drop-in (installed as /etc/pulse/default.pa.d/20-wtk-app-share.pa)
+#
+# The shipped /etc/pulse/default.pa ends with `.include /etc/pulse/default.pa.d`
+# and Alpine does not ship that directory, so the Dockerfile creates it.
+#
+# Access model - one shared desktop sink, no anonymous client, no capture path:
+#   * the base default.pa loads module-native-protocol-unix with no arguments;
+#     we unload it and load two explicitly-configured sockets, both cookie-
+#     authenticated (auth-anonymous=0 + auth-cookie-enabled=1).
+#   * /run/pulse/native      - container-internal (dir 0700 abc): relay, pactl.
+#   * /run/wt-kasm-app/native - the app-facing socket, on the host bind volume.
+#     Its parent directory is 2770 abc:$PGID (init-wtk-appshare), so access
+#     requires the volume mount AND gid $PGID AND the server cookie bytes
+#     (published as 0640 abc:$PGID). nginx(102)/messagebus(101) are refused.
+#   * The sink is a null sink. No record source is loaded anywhere in this
+#     image, and the relay only ever opens <sink>.monitor.
+#
+# Cookie path is pinned by svc-pulseaudio: HOME=/run/pulse and
+#   PULSE_COOKIE=/run/pulse/.config/pulse/cookie
+# so the daemon's cookie is the exact file init-wtk-appshare generates and
+# publishes, and a container restart can never desynchronise them.
+#
+# SYNTAX HARD CONSTRAINT (cost us one audio crash-loop): pulse parses this
+# file strictly line by line and has NO backslash continuation. A multi-line
+# load-module turns every argument line into "Unknown command", the module
+# silently never loads, and clients then report "Connection failure:
+# Connection refused". EVERY directive below is one line.
+#
+# pulse 16.1 (this base) derives the monitor name from the sink name
+# (auto_null -> auto_null.monitor) and has NO source_name= argument; passing
+# one makes the load fail. module-native-protocol-unix here accepts only
+# socket= auth-anonymous= auth-cookie= auth-cookie-enabled= auth-group=
+# auth-group-enable= srbchannel= - access-mode= and lock-file= do not exist.
+
+.nofail
+
+unload-module module-native-protocol-unix
+load-module module-native-protocol-unix socket=/run/pulse/native auth-anonymous=0 auth-cookie-enabled=1
+load-module module-native-protocol-unix socket=/run/wt-kasm-app/native auth-anonymous=0 auth-cookie-enabled=1
+
+.ifexists module-null-sink.so
+unload-module module-null-sink
+load-module module-null-sink sink_name=auto_null sink_properties=device.description=wtk-desktop-audio
+set-default-sink auto_null
+.endif

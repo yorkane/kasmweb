@@ -1,0 +1,12 @@
+#!/bin/sh
+# wt-kasm - K-route KasmVNC 桌面管理入口（薄壳；全部逻辑在 manager/ 包）
+# 用法: wt-kasm list | status [id] | start <id> | stop <id> | app start <id>
+#        init | verify <id> | registry [--refresh] | daemon [--detach|--foreground] | run
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
+if [ -n "${PYTHONPATH:-}" ]; then PYTHONPATH="$ROOT:$PYTHONPATH"; else PYTHONPATH="$ROOT"; fi
+export PYTHONPATH
+PY="${WT_KASM_PYTHON:-python3}"
+exec "$PY" -m manager.cli "$@"
+

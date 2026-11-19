@@ -1,0 +1,212 @@
+# kasmweb tint2 任务栏 — 最简版（panel_items = TC）
+# 目标：底部整宽 30px，含 tasklist（最小化应用可见可恢复）+ 时钟。
+# 本产品没有启动器条目也没有托盘图标 ⇒ launcher 段与 systray 段整体移除（LTSBC → TC）。
+# 其余几何逐字保留：30px 面板 + clock_padding = 44 0 是浏览器端音频按钮的暗色落脚带，删了会让按钮压住时钟。
+# 依赖：apk add tint2（tint2 自带 /usr/bin/fcitx 无关；托盘需要 gtk3/imlib2，均为包依赖）
+#
+# 与 xfce4-panel 版本的差异（Alpine 线）：tint2 不需要 D-Bus / xfconf，
+# 直接 tint2 -c <file> 即可 ⇒ 更适合 s6 longrun（无 dbus-run-session 前台约束）。
+
+# tint2 17.0.2 (Alpine 3.17) - bottom taskbar for the webtop-kasmvnc image.
+# Provenance: copied from script/webtop-image/windowing/tint2/tint2rc (measured
+# 30px panel + 44px clock band on the previous webtop line) with exactly two
+# changes, both marked below:
+#   1) panel_window_name = wdev-taskbar -> wtk-taskbar (this product's name;
+#      openbox matches on it in overlays.applications.xml)
+#   2) font family 'sans' -> 'Noto Sans CJK SC' (the base image ships
+#      font-noto, no CJK; the build installs font-noto-cjk, and a bare
+#      'sans' alias rendered CJK task titles as tofu boxes)
+# Layout numbers are deliberately untouched: the 30px panel height and the
+# 44px clock padding are the measured geometry the browser-side audio button
+# relies on (see the clock section).
+
+#-------------------------------------
+# Backgrounds
+#-------------------------------------
+# 1: 面板底（深色半透明，与 KasmVNC 桌面协调）
+rounded = 0
+border_width = 0
+border_sides = TBLR
+background_color = #1c1712 92
+border_color = #1c1712 0
+background_color_hover = #1c1712 92
+border_color_hover = #1c1712 0
+background_color_pressed = #1c1712 92
+border_color_pressed = #1c1712 0
+
+# 2: 普通任务按钮 / 最小化任务按钮
+rounded = 3
+border_width = 1
+border_sides = TBLR
+background_color = #6b5b45 18
+border_color = #c8a24a 26
+background_color_hover = #c8a24a 30
+border_color_hover = #e8c76a 55
+background_color_pressed = #c8a24a 45
+border_color_pressed = #e8c76a 70
+
+# 3: 活动（聚焦）任务按钮
+rounded = 3
+border_width = 1
+border_sides = TBLR
+background_color = #8a2f2a 55
+border_color = #e8c76a 70
+background_color_hover = #a03a33 60
+border_color_hover = #f0d68a 80
+background_color_pressed = #8a2f2a 70
+border_color_pressed = #e8c76a 90
+
+# 4: 紧急（请求注意）任务
+rounded = 3
+border_width = 1
+border_sides = TBLR
+background_color = #b4632a 90
+border_color = #f0d68a 100
+background_color_hover = #cc7700 90
+border_color_hover = #ffcc66 90
+background_color_pressed = #b4632a 90
+border_color_pressed = #f0d68a 100
+
+# 5: 提示气泡
+rounded = 2
+border_width = 1
+border_sides = TBLR
+background_color = #1c1712 100
+border_color = #c8a24a 70
+background_color_hover = #1c1712 100
+border_color_hover = #c8a24a 70
+background_color_pressed = #1c1712 100
+border_color_pressed = #c8a24a 70
+
+#-------------------------------------
+# Panel
+#-------------------------------------
+panel_items = TC
+panel_size = 100% 30
+panel_margin = 0 0
+panel_padding = 4 2 4
+panel_background_id = 1
+wm_menu = 1
+panel_dock = 1
+panel_position = bottom center horizontal
+panel_layer = top
+panel_monitor = all
+panel_shrink = 0
+autohide = 0
+autohide_show_timeout = 0.2
+autohide_hide_timeout = 0.5
+autohide_height = 2
+strut_policy = follow_size
+panel_window_name = wtk-taskbar
+disable_transparency = 0
+mouse_effects = 1
+font_shadow = 0
+mouse_hover_icon_asb = 100 0 12
+mouse_pressed_icon_asb = 100 0 0
+
+#-------------------------------------
+# Taskbar
+#-------------------------------------
+taskbar_mode = single_desktop
+taskbar_hide_if_empty = 0
+taskbar_padding = 2 2 4
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+taskbar_name = 0
+taskbar_hide_inactive_tasks = 0
+taskbar_hide_different_monitor = 0
+taskbar_hide_different_desktop = 0
+taskbar_always_show_all_desktop_tasks = 1
+taskbar_name_padding = 4 2
+taskbar_name_background_id = 0
+taskbar_name_active_background_id = 0
+taskbar_name_font_color = #e8dcc0 100
+taskbar_name_active_font_color = #ffffff 100
+taskbar_distribute_size = 1
+taskbar_sort_order = application
+task_align = left
+
+#-------------------------------------
+# Task
+#-------------------------------------
+task_text = 1
+task_icon = 1
+task_centered = 1
+urgent_nb_of_blink = 20
+task_maximum_size = 200 34
+task_padding = 4 2 4
+task_font = Noto Sans CJK SC 9
+task_tooltip = 1
+task_thumbnail = 0
+task_thumbnail_size = 210
+task_font_color = #f2e9d8 100
+task_active_font_color = #ffffff 100
+task_urgent_font_color = #ffffff 100
+task_iconified_font_color = #b8a887 80
+task_icon_asb = 92 0 0
+task_active_icon_asb = 100 0 8
+task_urgent_icon_asb = 100 0 0
+task_iconified_icon_asb = 65 0 -8
+task_background_id = 2
+task_active_background_id = 3
+task_urgent_background_id = 4
+task_iconified_background_id = 2
+mouse_left = toggle_iconify
+mouse_middle = none
+mouse_right = none
+mouse_scroll_up = none
+mouse_scroll_down = none
+
+#-------------------------------------
+# Clock
+#-------------------------------------
+time1_format = %H:%M
+time2_format =
+time1_timezone =
+time2_timezone =
+time1_font = Noto Sans CJK SC 9
+clock_font_color = #f2e9d8 100
+# clock_padding = 水平 垂直：时钟左右两侧各留该像素。右侧那一段留白是刻意保留的
+# "浏览器音频按钮带"（约 44 X-px）——Kasm 前端在每个观看者浏览器里把音频开关
+# 渲染在画布右下角，正好落在这条空白面板底上，不遮时钟 / 托盘 / 任务按钮。
+# 改小会让按钮压住时钟，改大会把时钟往左推太多。
+clock_padding = 44 0
+clock_background_id = 0
+clock_tooltip =
+clock_tooltip_timezone =
+clock_lclick_command =
+clock_rclick_command =
+clock_mclick_command =
+clock_uwheel_command =
+clock_dwheel_command =
+
+#-------------------------------------
+# Battery（无电池环境整体隐藏）
+#-------------------------------------
+battery_tooltip = 0
+battery_low_status = 10
+battery_low_cmd =
+battery_full_cmd =
+battery_font_color = #ffffff 100
+bat1_format =
+bat2_format =
+battery_padding = 1 0
+battery_background_id = 0
+battery_hide = 101
+battery_lclick_command =
+battery_rclick_command =
+battery_mclick_command =
+battery_uwheel_command =
+battery_dwheel_command =
+ac_connected_cmd =
+ac_disconnected_cmd =
+
+#-------------------------------------
+# Tooltip
+#-------------------------------------
+tooltip_show_timeout = 0.4
+tooltip_hide_timeout = 0.1
+tooltip_padding = 6 4
+tooltip_background_id = 5
+tooltip_font_color = #f2e9d8 100
+tooltip_font = Noto Sans CJK SC 9

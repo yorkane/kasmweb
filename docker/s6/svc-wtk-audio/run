@@ -1,0 +1,38 @@
+#!/usr/bin/with-contenv bash
+# svc-wtk-audio - browser audio relay:
+#   auto_null.monitor -> ffmpeg(MP2) -> node relay 127.0.0.1:4901
+#   -> nginx /audio -> jsmpeg in the browser.
+#
+# The relay binds loopback only and is reachable exclusively through this
+# container's own nginx entry. No microphone path exists: ffmpeg opens
+# <sink>.monitor and nothing else.
+#
+# Two env fixes belong here rather than in the image env, because they are
+# properties of this service, not of the session:
+#   PULSE_RUNTIME_PATH - the base presets /defaults (root 0700), so a client
+#     running as abc cannot create its runtime dir there; /run/pulse is tmpfs.
+#   WTK_AUDIO_* - relay config. The public origin has to match what the browser
+#     sees, so it is forwarded from WTK_PUBLIC_ORIGIN and never hardcoded.
+set -eu
+
+SHARE="${WTK_APPSHARE:-/run/wt-kasm-app}"
+export PULSE_RUNTIME_PATH=/run/pulse
+export PULSE_SERVER="unix:$SHARE/native"
+export HOME="${HOME:-/tmp}"
+export DISPLAY=$(printf '%s' "$DISPLAY" | tr -d '\r\n')
+
+# The relay needs the sink to exist; ffmpeg would exit and s6 would crash-loop.
+MONITOR="${WTK_AUDIO_MONITOR:-auto_null.monitor}"
+for _ in $(seq 1 60); do
+  if s6-setuidgid abc env PULSE_SERVER="$PULSE_SERVER" PULSE_RUNTIME_PATH=/run/pulse \
+       pactl list sources short 2>/dev/null | grep -q "${MONITOR}[[:space:]]"; then
+    break
+  fi
+  sleep 1
+done
+if ! s6-setuidgid abc env PULSE_SERVER="$PULSE_SERVER" PULSE_RUNTIME_PATH=/run/pulse \
+     pactl list sources short 2>/dev/null | grep -q "${MONITOR}[[:space:]]"; then
+  echo "wtk-audio: WARN: pulse source $MONITOR absent after 60s; starting relay anyway (it retries)" >&2
+fi
+
+exec s6-setuidgid abc /usr/bin/node /opt/wtk/audio/relay.js

@@ -1,0 +1,42 @@
+# wt-kasm-dispatcher.service — K 线 KasmVNC 单入口 dispatcher（仅自建新服务）
+#
+# 安装方式（由人执行；run-dispatcher.sh 只打印，绝不自行安装）：
+#   install -Dm644 systemd/wt-kasm-dispatcher.service \
+#     ~/.config/systemd/user/wt-kasm-dispatcher.service
+#   systemctl --user daemon-reload && systemctl --user enable --now wt-kasm-dispatcher
+# 无 XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS 的 shell（cron / 远程命令）里调 systemctl --user：
+#   env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+#     systemctl --user status wt-kasm-dispatcher
+#
+# 本 unit 只监听 127.0.0.1:25320（loopback）；认证授权全交 authz，本服务不判 Origin/Host 安全矩阵。
+
+[Unit]
+Description=wt-kasm K-route KasmVNC loopback dispatcher (127.0.0.1:25320, no auth, no container mgmt)
+Documentation=https://github.com/yorkane/kasmweb
+After=network-online.target wt-kasm-manager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__DISPATCHER_DIR__
+Environment=WTK_LISTEN_HOST=127.0.0.1
+Environment=WTK_PORT=25320
+Environment=WTK_REGISTRY=/data/app/webtop-kasmvnc/registry.json
+Environment=WTK_PUBLIC_ORIGIN=http://127.0.0.1:25320
+Environment=WTK_BACKEND_PORT_MIN=25321
+Environment=WTK_BACKEND_PORT_MAX=25329
+Environment=WTK_MAX_WS=64
+Environment=WTK_HTTP_TIMEOUT_MS=60000
+ExecStart=__NODE__ __DISPATCHER_DIR__/server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/data/tmp
+
+[Install]
+WantedBy=default.target

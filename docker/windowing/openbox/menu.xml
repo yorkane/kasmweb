@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- /defaults/menu.xml - root menu for the webtop-kasmvnc image.
+     The base image copies /defaults/menu.xml to $HOME/.config/openbox/menu.xml
+     on first run only (init-kasmvnc-config, guarded with -f), so a user who
+     edits their own menu keeps it forever; this file is the shipped default.
+
+     Apps are launched through wtk-launch, i.e. the manager's launch socket, and
+     NOT by running a binary here: the manager owns profiles (one Chrome profile
+     per desktop, generation-checked) and the launch contract accepts only
+     {action,appId}. A raw chrome command line in an Execute action would be a
+     second, unaudited launch path and the exact way a Chrome profile ends up
+     opened twice. Terminal/openbox actions are image-local utilities and stay
+     direct.
+
+    kasmweb product scope: the desktop ships a single managed app (Chrome), so
+    this menu carries exactly one app entry - the same single-source rule as
+    /defaults/desktop (one Chrome.desktop; the image gate refuses a second).
+-->
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="桌面">
+    <item label="Chrome">
+      <action name="Execute"><command>/opt/wtk/bin/wtk-launch chrome</command></action>
+    </item>
+    <separator />
+    <item label="终端">
+      <action name="Execute"><command>/usr/bin/xterm</command></action>
+    </item>
+    <item label="重读窗口管理配置">
+      <action name="Reconfigure" />
+    </item>
+    <item label="注销（桌面会话重启）">
+      <action name="Exit" />
+    </item>
+  </menu>
+</openbox_menu>
+

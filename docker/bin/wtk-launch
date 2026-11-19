@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""wtk-launch - the only in-image client of the manager's launch socket.
+
+Desktop icons and menu entries call `wtk-launch <appId> [action]`; this client
+opens <appshare>/launch.sock (AF_UNIX, created by the manager per desktop) and
+sends exactly one JSON line (frozen contract, compact separators; the old
+text protocol is retired - the manager keeps a legacy-text branch only as a
+rolling-upgrade window, so new components must never send text):
+  {"action":"launch","appId":"chrome"}
+  {"action":"focus","appId":"chrome"}
+The key set is exactly {action, appId}: no argv / url / exec / env / timeout
+keys, because parameters come only from the manager registry. daemon.py
+_handle_line forwards the line to actions.handle_launch_line, which accepts
+that JSON form and replies with one JSON line
+{"ok":bool,"appId":...,"action":...,"reason":...}.
+
+The manager owns everything after that: it spawns/raises the real host process
+(host binary on the desktop's X display), so the image never execs an app
+itself and carries no argv, url, or env through this path. The vocabulary is
+fixed on both sides (registry appIds) - unknown appId/action are rejected
+HERE, before the socket.
+
+Framing: socket timeout TIMEOUT_S=60s (bounded); the reply is read in a recv
+loop until newline or EOF, capped at MAX_REPLY bytes - overflow fails closed.
+
+Exit codes:
+  0 manager answered ok
+  2 usage / bad appId / bad action (never touches the socket)
+  3 socket create/connect failed (manager down, volume not mounted)
+  4 manager answered with an error
+  5 recv timeout / empty reply / unparseable / not an object / over MAX_REPLY
+"""
+import json
+import os
+import socket
+import sys
+
+APP_IDS = ("chrome", "vcmi")
+ACTIONS = ("launch", "focus")
+TIMEOUT_S = 60.0
+MAX_REPLY = 4096
+
+
+def _recv_reply(sock):
+    """One reply up to newline or EOF, capped at MAX_REPLY. None = failure."""
+    buf = b""
+    while True:
+        try:
+            chunk = sock.recv(1024)
+        except socket.timeout:
+            sys.stderr.write("wtk-launch: no answer within %.1fs\n" % TIMEOUT_S)
+            return None
+        except OSError as exc:
+            sys.stderr.write("wtk-launch: recv failed: %s\n" % exc)
+            return None
+        if not chunk:
+            break  # EOF: peer closed after (or without) answering
+        buf += chunk
+        nl = buf.find(b"\n")
+        if nl != -1:
+            if nl > MAX_REPLY:
+                sys.stderr.write("wtk-launch: answer exceeds %d bytes\n" % MAX_REPLY)
+                return None
+            break
+        if len(buf) > MAX_REPLY:
+            sys.stderr.write("wtk-launch: answer exceeds %d bytes\n" % MAX_REPLY)
+            return None
+    return buf
+
+
+def main(argv):
+    if len(argv) < 2 or len(argv) > 3:
+        sys.stderr.write("usage: wtk-launch <appId> [launch|focus]\n")
+        return 2
+    app_id = argv[1]
+    action = argv[2] if len(argv) == 3 else "launch"
+    if app_id not in APP_IDS:
+        sys.stderr.write("wtk-launch: unknown appId %r (want: %s)\n"
+                         % (app_id, "|".join(APP_IDS)))
+        return 2
+    if action not in ACTIONS:
+        sys.stderr.write("wtk-launch: unknown action %r (want: %s)\n"
+                         % (action, "|".join(ACTIONS)))
+        return 2
+
+    share = os.environ.get("WTK_APPSHARE") or "/run/wt-kasm-app"
+    path = os.path.join(share, "launch.sock")
+    req = json.dumps({"action": action, "appId": app_id}, separators=(",", ":"))
+
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(TIMEOUT_S)
+        s.connect(path)
+    except OSError as exc:
+        sys.stderr.write("wtk-launch: cannot reach %s: %s\n" % (path, exc))
+        return 3
+    try:
+        s.sendall((req + "\n").encode("utf-8"))
+        blob = _recv_reply(s)
+    finally:
+        s.close()
+
+    if blob is None:
+        return 5  # reason already reported; never invent an empty ok
+    line = blob.split(b"\n", 1)[0]
+    if not line.strip():
+        sys.stderr.write("wtk-launch: manager closed the socket without answering\n")
+        return 5
+    try:
+        reply = json.loads(line.decode("utf-8", "replace"))
+    except ValueError:
+        sys.stderr.write("wtk-launch: unparseable answer: %r\n" % line[:200])
+        return 5
+    if not isinstance(reply, dict):
+        sys.stderr.write("wtk-launch: answer is not a JSON object: %r\n" % line[:200])
+        return 5
+    if reply.get("ok") is True:
+        sys.stdout.write("wtk-launch: %s %s accepted\n" % (action, app_id))
+        return 0
+    sys.stderr.write("wtk-launch: manager refused: %s\n"
+                     % json.dumps(reply, separators=(",", ":"))[:300])
+    return 4
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

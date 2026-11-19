@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- openbox keyboard overlay: inserted at the TOP of the stock rc's <keyboard>
+     section by build-rc.sh. Additions only - none of these collide with a stock
+     3.6.1 binding (A-F4 / A-space / W-d / C-A-*), so the result never depends on
+     "later binding wins" semantics.
+
+     Dragging and resizing are already stock (Frame context A-Left = Move,
+     A-Right = Resize, titlebar left-drag = Move, border left-drag = Resize);
+     this overlay only adds what a taskbar session actually needs.
+-->
+  <!-- minimise; the taskbar button is the primary restore affordance -->
+  <keybind key="A-F9">
+    <action name="Iconify"/>
+  </keybind>
+  <!-- maximise toggle. No effect on Chromium: its decor/maximized are pinned by
+       the applications overlay (maximized=no is the 2026-10-15 black-screen fix) -->
+  <keybind key="A-F10">
+    <action name="ToggleMaximize"/>
+  </keybind>
+  <!-- window list, minimised windows included: picking an entry deiconifies it.
+       Openbox 3.6.1 has NO Deiconify action (it logs Invalid action
+       "Deiconify"), so the client-list-combined-menu is the keyboard path back. -->
+  <keybind key="A-S-F9">
+    <action name="ShowMenu"><menu>client-list-combined-menu</menu></action>
+  </keybind>
+  <!-- window menu: the only control surface for undecorated apps -->
+  <keybind key="A-F3">
+    <action name="ShowMenu"><menu>client-menu</menu></action>
+  </keybind>
+

@@ -1,0 +1,117 @@
+# webtop-kasmvnc single-entry vhost (rendered to /etc/nginx/http.d/default.conf)
+#
+# Topology: dispatcher -> this container :3000 -> { Xvnc embedded httpd 127.0.0.1:6901,
+#                                                   audio relay 127.0.0.1:4901 }
+# Placeholders __WTK_PORT__ / __WTK_BASE_PATH__ / __WTK_XVNC_ORIGIN__ /
+# __WTK_RELAY_ORIGIN__ are replaced atomically by /opt/wtk/nginx/render-nginx.py.
+#
+# Contract:
+#   * no auth_basic (authn/authz is the authz gateway's job), no TLS server;
+#   * every resource is same-origin, so the base image's COEP/COOP semantics hold;
+#   * /websockify and /audio are EXACT matches: the Kasm client is pointed at
+#     ?path=desktop%2F<id>%2Fwebsockify (ui.js:1379 appends the '/' + path) and the
+#     audio front-end connects to the base + audio, so after the dispatcher strips
+#     the prefix both land exactly on these paths;
+#   * location / proxies the Xvnc embedded httpd and injects the audio front-end
+#     with sub_filter on the anchor <title>KasmVNC</title> (present in a317's
+#     index.html and vnc.html). Accept-Encoding is cleared, otherwise the upstream
+#     gzips the body and sub_filter silently matches nothing.
+
+map $http_upgrade $wtk_connection {
+  default upgrade;
+  ''      close;
+}
+
+server {
+  listen __WTK_PORT__ default_server;
+  server_name _;
+
+  add_header 'Cross-Origin-Embedder-Policy' 'require-corp' always;
+  add_header 'Cross-Origin-Opener-Policy'   'same-origin'  always;
+  add_header 'Cross-Origin-Resource-Policy' 'same-site'    always;
+  add_header 'X-Content-Type-Options'       'nosniff'      always;
+
+  # The page bootstrap is an EXTERNAL file (root ruling 2026-11-13: no inline
+  # <script> in the injected markup). render-nginx.py writes it to
+  # /opt/wtk/web/wtk-boot.js on every boot; the vhost injects it with a RELATIVE
+  # url, so the browser resolves it under the dispatcher prefix and it arrives
+  # here with the prefix already stripped, i.e. exactly /wtk-boot.js.
+  # Served from disk, not proxied: it carries config, not desktop content.
+  # No add_header here on purpose - nginx would then drop the inherited
+  # COEP/COOP/CORP/nosniff set above.
+  location = /wtk-boot.js {
+    root /opt/wtk/web;
+    default_type application/javascript;
+    access_log off;
+  }
+
+  location = /audio/healthz {
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $http_origin;
+    proxy_read_timeout 10s;
+    proxy_buffering off;
+    proxy_pass __WTK_RELAY_ORIGIN__/healthz;
+  }
+
+  location = /audio {
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $http_origin;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $wtk_connection;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_pass __WTK_RELAY_ORIGIN__/audio;
+  }
+
+  location ^~ /audiojs/ {
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header Origin $http_origin;
+    proxy_read_timeout 60s;
+    proxy_buffering off;
+    proxy_pass __WTK_RELAY_ORIGIN__;
+  }
+
+  location = /websockify {
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Cookie "";
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $wtk_connection;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_pass __WTK_XVNC_ORIGIN__/websockify;
+  }
+
+  location / {
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Cookie "";
+    proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+    # Injection trio, all EXTERNAL / relative / same-origin, order matters:
+    #   wtk-boot.js  defines window.__WTK_BASE (served from disk, see location above)
+    #   audiojs/layout.css then layout.js (read-only geometry probe: __wdevLayout)
+    #   then audio.js, which reads __WTK_BASE and wires the control
+    sub_filter '<title>KasmVNC</title>' '<title>KasmVNC</title><script src="wtk-boot.js"></script><link rel="stylesheet" href="audiojs/layout.css"><script src="audiojs/layout.js" defer></script><script src="audiojs/audio.js" defer></script>';
+    sub_filter_once on;
+    proxy_pass __WTK_XVNC_ORIGIN__/;
+  }
+}

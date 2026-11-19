@@ -1,0 +1,159 @@
+#!/usr/bin/with-contenv bash
+# svc-kasmvnc - native-default variant (KasmVNC 1.1.0 Xvnc, loopback-only, DISPLAY from env (= :1)).
+#
+# WHAT THIS VARIANT CHANGES, AND NOTHING ELSE: the resize channel.
+#   The Xvnc command line below passes NO -AcceptSetDesktopSize flag at all, so
+#   KasmVNC's own native default governs. KasmVNC 1.1.0 -help records that flag as
+#   default=1 (historical evidence: upstream-project report doc/Kasm远程与固定分辨
+#   率调研-20261114.md section 2 — historical forensics, NOT published with this
+#   repository), i.e. an inbound
+#   SetDesktopSize is ACCEPTED: the framebuffer can change size when a remote resize
+#   arrives. It changes size only then - nothing resizes spontaneously, and the
+#   client-side default (Kasm iframe resize control at its shipped default = off)
+#   requests no remote resize, so on the common path the framebuffer stays at the
+#   startup initial value. This is the channel the LSIO
+#   base line itself ships: its svc-kasmvnc/run passes no such flag (historical
+#   evidence copy at /data/tmp/a317-inspect-20261113/ - temporary face,
+#   historical forensics, NOT published with this repository).
+#
+#   WTK_WIDTH / WTK_HEIGHT below are a STARTUP INITIAL VALUE, not a pin - and the
+#   value ACTUALLY used comes from the ENVIRONMENT, not from this file. The parent
+#   image k012 writes WTK_WIDTH=1600 / WTK_HEIGHT=900 into its Docker Config.Env, so
+#   with-contenv hands this service 1600x900, and the manager's compose file
+#   overrides both variables per desktop (WTK_WIDTH / WTK_HEIGHT from the spec).
+#   Therefore the production startup size of this image = the inherited / injected
+#   environment value, and 1600x900 is the value observed under the current manager.
+#   The 1024x768 in the GEOMETRY block below is only the shell fallback for the case
+#   where the variable is absent or empty (a bare run with no env), NOT the default
+#   of this product. The upstream LSIO native line's own initial value (1024x768,
+#   hardcoded in the base layer's own run file) is a SEPARATE fact about upstream -
+#   it is not an environment value inherited by this build, and the two must not be
+#   reported as one number.
+#   Xvnc cannot start with no screen at all, so "no initial value" would be false;
+#   the initial value is reported truthfully as the environment value, and an initial
+#   value is not a pin. This overlay adds no ENV of its own: it never overrides the
+#   caller's or the manager's geometry, and it reads no geometry key of its own.
+#
+#   THREE LAYERS OWN ONE RESIZE (root ruling 2026-11-16 - keep them separate, and do
+#   not read this file as "the desktop now resizes by itself"):
+#     L1 server-side PERMISSION (the only layer this file touches). The flag is
+#        absent, so KasmVNC's native default applies and SetDesktopSize is no longer
+#        refused: the framebuffer CAN move off the startup initial value. The
+#        canonical run reaches the same permission only when its switch is 1; here it
+#        needs no env key, no image-level policy default, no fail-closed parser.
+#     L2 client-side REQUEST (NOT enabled by this file). A real Kasm 1.1 session in
+#        an iframe, with the viewer's own resize control left at its shipped default
+#        (off), sends no remote-resize request AND does no scaling of its own: the
+#        engine reports permission = 1 on the server side while the client asks for
+#        nothing. Permission without a request changes no pixels and resizes nothing
+#        on either side, so L1 is not "adaptive desktop is live" and the two must
+#        never be reported as one fact.
+#     L3 entry/URL gate (NOT touched here). The K-line dispatcher rewrites
+#        resize=remote to resize=scale (dispatcher/lib/selector.js), so even a
+#        requesting client is steered to web scaling until that gate is lifted by its
+#        own authorized task.
+#   Proven by the upstream native-default overlay (historical forensics, NOT
+#   published with this repository): L1, at static level only (level 2). Acceptance of a real
+#   request (L2 through L3) remains unverified GUI territory and is not claimed here.
+#
+# LINEAGE (historical): these bytes descend from the upstream project's canonical
+# docker/s6/svc-kasmvnc/run (historical tree path image/s6/svc-kasmvnc/run;
+# historical forensics, NOT published with this repository). In THIS repository
+# the native variant below IS the shipped product - installed at
+# docker/s6/svc-kasmvnc/run -> /etc/s6-overlay/s6-rc.d/svc-kasmvnc/run:
+#   DISPLAY normalisation, the shared-dir gate, the generation token published BEFORE
+#   Xvnc is spawned, hw3d/DRINODE detection, loopback-only listener (-interface
+#   127.0.0.1 + -rfbport 0 + -nolisten tcp), -AlwaysShared, -DisconnectClients 0
+#   -MaxIdleTime 0 -IdleTimeout 0, the COOP/COEP headers, -Log *:stdout:10, exec as
+#   abc. Every other service (tint2 taskbar, Openbox, audio relay, nginx entry
+#   injection, CJK fonts, startwm's root-window token writer) is inherited from k012
+#   untouched: this overlay installs exactly two files, zero new services.
+#
+# NOT CLAIMED HERE: the K-line dispatcher still rewrites resize=remote to resize=scale
+# (dispatcher/lib/selector.js), so a browser resize reaches the desktop as web scaling
+# until that gate is lifted by its own authorized task. This layer only stops the
+# image itself from refusing SetDesktopSize.
+#
+# NOT GEOMETRY-ATTESTABLE (stated so it is not discovered as a surprise): these bytes
+# differ from the canonical source tree, so build-image.sh attest gate D refuses to
+# issue an attestation for an image built from them, and manager/attest.py gates B and
+# D reject its argv (there is no -AcceptSetDesktopSize to compare against a declaration).
+# That is the old contract rejecting this image - by design, not bypassed: this
+# directory modifies neither attest.py nor build-image.sh. Deploy the image only as a
+# legacy desktop (no declared geometry), the branch where the attestation chain is
+# never invoked.
+#
+# LISTENER SURFACE (unchanged): the only way in is this container's own nginx on
+# :3000 (dispatcher -> :3000 -> 6901).
+#
+# GENERATION (root ruling 2026-11-13, unchanged): a fresh token is published on the
+# shared volume BEFORE Xvnc is spawned and written to the X root window by svc-de as
+# _WT_KASM_GENERATION. The manager refuses to relay a display whose root token does
+# not equal appshare/generation, so a restarted Xvnc can never pass for the old
+# session -> fail-closed.
+#
+# RESIZE-SWITCH KEY NAME: deliberately absent from this file. The upstream
+# contract test (historical: tests/test_adaptive_image_contract.py - historical
+# forensics, NOT published with this repository) required that key literal to
+# live only in the upstream canonical pair; in this repository the key-name rule
+# is enforced by docker/Dockerfile's native gate instead, and this variant reads
+# no such key - native behaviour needs no switch. In prose, refer to it as
+# "the resize switch".
+set -eu
+
+SHARE="${WTK_APPSHARE:-/run/wt-kasm-app}"
+XVNC="/usr/local/bin/Xvnc"
+
+# with-contenv injects file contents verbatim; the base image writes DISPLAY with
+# a trailing newline and Xlib then parses display number "1\n" and refuses the
+# display. Normalise it here and back into the env file for every later service.
+DISPLAY_N=$(printf '%s' "$DISPLAY" | tr -d '\r\n')
+if [ -z "$DISPLAY_N" ]; then echo "svc-kasmvnc: FATAL: DISPLAY empty" >&2; exit 1; fi
+printf '%s' "$DISPLAY_N" > /run/s6/container_environment/DISPLAY
+DISPLAY="$DISPLAY_N"; export DISPLAY
+DISP_NO="${DISPLAY_N#:}"
+
+# --- BEGIN WTK_NATIVE GEOMETRY (contract-tested block; keep both sentinels) ---
+# Startup INITIAL value only - see the header. The two numbers here are the shell
+# FALLBACK used when the variable is absent or empty. In production the parent
+# image's Config.Env supplies both variables (k012 sets WTK_WIDTH=1600 /
+# WTK_HEIGHT=900, and the manager's compose file can override them per desktop), so
+# the environment value is what Xvnc actually boots with: this file adds no ENV of
+# its own and never overrides the caller. Nothing pins it afterwards either: no
+# -AcceptSetDesktopSize flag is passed below, so KasmVNC's native default (accept)
+# governs and the framebuffer may be resized by a remote resize request. No env key
+# is read, so this variant has no 0|1 grammar and no fail-closed parser: "native" is
+# the only policy this file can express. A caller that wants a pinned desktop uses
+# the canonical tree, not this overlay.
+: "${WTK_WIDTH:=1024}"
+: "${WTK_HEIGHT:=768}"
+: "${WTK_FRAMERATE:=30}"
+RESIZE_MODE="native"
+# --- END WTK_NATIVE GEOMETRY ---
+
+[ -d "$SHARE" ] || { echo "svc-kasmvnc: FATAL: shared dir $SHARE not mounted" >&2; exit 1; }
+
+gen=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
+[ -n "$gen" ] || { echo "svc-kasmvnc: FATAL: no entropy for generation" >&2; exit 1; }
+tmp="$SHARE/.generation.$$"
+printf '%s\n' "$gen" > "$tmp"
+mv -f "$tmp" "$SHARE/generation"
+echo "svc-kasmvnc: generation=$gen display=$DISPLAY geometry=${WTK_WIDTH}x${WTK_HEIGHT}@${WTK_FRAMERATE} resize=$RESIZE_MODE"
+
+HW3D=""
+if ls /dev/dri/renderD* >/dev/null 2>&1; then HW3D="-hw3d"; fi
+: "${DRINODE:=/dev/dri/renderD128}"
+
+exec s6-setuidgid abc "$XVNC" "$DISPLAY" \
+  ${HW3D} \
+  -drinode "$DRINODE" \
+  -geometry "${WTK_WIDTH}x${WTK_HEIGHT}" -depth 24 \
+  -interface 127.0.0.1 -websocketPort 6901 -rfbport 0 -nolisten tcp \
+  -sslOnly 0 -PublicIP 127.0.0.1 \
+  -SecurityTypes None -disableBasicAuth \
+  -AlwaysShared -RectThreads 0 \
+  -DisconnectClients 0 -MaxIdleTime 0 -IdleTimeout 0 \
+  -FrameRate "$WTK_FRAMERATE" \
+  -http-header Cross-Origin-Embedder-Policy=require-corp \
+  -http-header Cross-Origin-Opener-Policy=same-origin \
+  -Log *:stdout:10

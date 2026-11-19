@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Chrome
+Comment=Open Chrome on the host
+Exec=/opt/wtk/bin/wtk-launch chrome
+Icon=/opt/wtk/windowing/desktop/icons/chrome.png
+Terminal=false
+StartupNotify=false

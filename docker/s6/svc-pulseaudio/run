@@ -1,0 +1,55 @@
+#!/usr/bin/with-contenv bash
+# svc-pulseaudio - one container-private PulseAudio (never the host instance).
+#
+# Differences from the base service (base = bare `pulseaudio --log-level=0`):
+#   * HOME=/run/pulse and PULSE_COOKIE pinned, so the server's cookie is the
+#     exact file init-wtk-appshare generates and publishes to the volume.
+#     With HOME=/config (the container default) the cookie would land in
+#     /config/.config/pulse/cookie and the published copy would be a lie.
+#   * -F /etc/pulse/default.pa so our default.pa.d drop-in is loaded even if a
+#     future base layer replaces the shipped default.pa.
+#   * -n (do not load the default script): pulse loads /etc/pulse/default.pa by
+#     itself (dump-conf shows load-default-script-file = yes) and THEN runs the
+#     -F script, so every module in our drop-in loads TWICE. Probe
+#     wtk-hc-probe/pulse_n.sh in the a317 base shows the second pass verbatim:
+#     socket-server.c bind(): Address in use, native-protocol load failures, and
+#     an auto_null.2 sink. -n makes -F the only startup script, which is what the
+#     contract needs: one daemon, two unix sockets, exactly one auto_null.
+#     Verified in-base: pulseaudio 16.1, help lists both `-F, --file=FILENAME`
+#     and `-n  Don't load default script file`.
+#   * --disallow-exit: the relay and the panel need the server; a pactl exit
+#     from any service must not tear desktop audio down.
+#   * stdout instead of /dev/null: the base redirects all pulse logs to bit
+#     bucket, which makes every audio failure unfalsifiable.
+set -eu
+
+export HOME=/run/pulse
+export PULSE_RUNTIME_PATH=/run/pulse
+export PULSE_COOKIE=/run/pulse/.config/pulse/cookie
+export DISPLAY=$(printf '%s' "$DISPLAY" | tr -d '\r\n')
+
+# /run is an overlayfs dir here (compose mounts tmpfs only on /tmp), so these
+# directories survive a restart; pulse's secure-dir check needs owner==self
+# and mode 0700, and the image layer ships /run/pulse root:root 0700 -
+# install -d never chowns an existing dir, so force it every start (this
+# script runs as root, before the setuid).
+install -d -m 0700 /run/pulse
+chown abc:abc /run/pulse
+chmod 0700 /run/pulse
+install -d -m 0700 /run/pulse/.config/pulse
+chown -R abc:abc /run/pulse/.config
+chmod 0700 /run/pulse/.config /run/pulse/.config/pulse
+install -d -m 0755 -o root -g root /etc/pulse/default.pa.d
+
+# The app-facing socket lives on the shared volume; its directory is created
+# (and chowned) by init-wtk-appshare, which svc-pulseaudio depends on, so the
+# bind below always has its 2770 directory. Nothing is created here for it.
+
+exec s6-setuidgid abc /usr/bin/pulseaudio \
+  -n \
+  -F /etc/pulse/default.pa \
+  --disallow-exit \
+  --disable-shm=yes \
+  --exit-idle-time=-1 \
+  --log-level=info \
+  --log-target=stderr

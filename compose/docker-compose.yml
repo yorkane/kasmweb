@@ -1,0 +1,56 @@
+# kasmweb single-desktop example - one container, loopback-only entry.
+#
+# What this file is: the minimal runnable contract for ONE kasmweb desktop.
+# The manager (scripts/install-manager.sh + scripts/wt-kasm) renders the
+# production per-desktop compose files itself; this example is the hand-run
+# equivalent and the shape it must stay compatible with.
+#
+# Rules encoded here (do not relax):
+#   * the only published port maps container :3000 (the in-container nginx
+#     entry) to a LOOPBACK address. 6901 (Xvnc httpd) and 4901 (audio relay)
+#     bind container loopback and are reachable only through that nginx entry.
+#   * /config persists the webtop profile; /run/wt-kasm-app is the app-share
+#     volume (xauth / pulse cookie / generation / app.json). The container
+#     refuses to start Xvnc when the app-share mount is absent (fail-closed).
+#   * shm_size 1g: Xvnc + Chrome share /dev/shm; the 64MiB docker default is
+#     not enough for a 1600x900 session.
+#   * restart: unless-stopped.
+#
+# Run:
+#   cd compose && docker compose up -d
+#   open http://127.0.0.1:25320/
+#   health: docker inspect --format '{{.State.Health.Status}}' kasmweb-demo
+# Image at deploy time: the shipped default below is the published image
+# ghcr.io/yorkane/kasmweb:latest (CI publishes it from this repo). For an
+# offline dev-box build tag the image locally (e.g. kasmweb:local-verify via
+# docker/Dockerfile) and point image: at that local tag.
+services:
+  desktop:
+    image: ghcr.io/yorkane/kasmweb:latest
+    container_name: kasmweb-demo
+    hostname: kasmweb-demo
+    restart: unless-stopped
+    network_mode: bridge
+    shm_size: 1g
+    ports:
+      - "127.0.0.1:25320:3000"
+    tmpfs:
+      - /tmp
+    environment:
+      WTK_DESKTOP_ID: demo
+      WTK_BASE_PATH: /
+      WTK_WIDTH: "1600"
+      WTK_HEIGHT: "900"
+      WTK_FRAMERATE: "30"
+      WTK_PUBLIC_ORIGIN: http://127.0.0.1:25320
+      PUID: "1000"
+      PGID: "1000"
+      DISPLAY: ":1"
+      START_DOCKER: "false"
+    volumes:
+      - ./data/demo/config:/config
+      - ./data/demo/appshare:/run/wt-kasm-app
+    labels:
+      kasmweb.managed: "manual"
+      kasmweb.route: kasmweb
+      kasmweb.desktop: demo
