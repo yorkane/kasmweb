@@ -17,8 +17,12 @@
 #   5 /opt/wtk/audio/web/jsmpeg.min.js and LICENSE-jsmpeg.txt are in the package
 #   6 /opt/wtk/windowing/desktop/icons/chrome.png is a real PNG
 #
-# Layouts handled: OCI 'docker save' (docker 23+: blobs/sha256/<digest>,
-# index.json -> manifest -> layers) and legacy (<digest>.tar + manifest.json).
+# Layouts handled: (A) OCI 'docker save' (docker 23+: index.json ->
+# blobs/sha256/*), (B) the buildx --load artifact the GitHub runner stores
+# (index.json additionally lists a provenance/attestation manifest - no layers[]
+# key, platform arch/os=unknown - reordered to the front: the resolver picks the
+# first entry that has a non-empty layers[] and is not an attestation, and
+# descends into nested indexes), (C) legacy manifest.json + <digest>.tar.
 # Overlay semantics applied during unpack: layers merged low -> high, .wh.*
 # whiteouts removed, .wh..wh..opq opaque markers clear their directory.
 #
@@ -71,31 +75,115 @@ esac
 # the miss here; the python resolver detects the layout from the archive listing.
 tar -xf "$SAVE" -C "$WORK" index.json 2>/dev/null || true
 python3 - "$SAVE" "$WORK/layers.txt" <<'PYEOF'
+# Layer resolver for three docker-save shapes (all produced by real pipelines):
+#   A. OCI archive (docker save >= 23): index.json -> blobs/sha256/*
+#   B. buildx --load artifact on the CI runner: index.json whose manifests[] ALSO
+#      contains a provenance/attestation manifest - NO "layers" key, annotations
+#      vnd.docker.reference.type=attestation-manifest, platform arch/os=unknown -
+#      and the docker store reorders it to the FRONT. Taking manifests[0] blindly
+#      dies with KeyError: layers (this is the CI failure of run #1).
+#   C. legacy archive: manifest.json[0]["Layers"] (uppercase), <hex>/layer.tar.
+# The image manifest is selected as: prefer platform linux/amd64, never an
+# attestation entry, never an entry whose blob lacks a non-empty layers[].
+# Nested indexes (multi-platform manifest lists) are descended into.
+# Every failure path prints an explicit diagnosis, never a bare KeyError.
 import json, sys, tarfile
 
 save_path, out_list = sys.argv[1], sys.argv[2]
+
+def die(msg):
+    raise SystemExit("verify-image-layout: " + msg)
+
 with tarfile.open(save_path, "r:") as t:
     members = set(m.name.lstrip("./") for m in t.getmembers())
+
+    def blob(digest):
+        p = digest.replace(":", "/")
+        for cand in ("blobs/" + p, p, "blobs/" + p + ".tar", p + ".tar"):
+            if cand in members:
+                return json.load(t.extractfile(cand))
+        return None
+
+    def pick(entries, depth):
+        # -> (digest, manifest, skipped_notes)
+        if depth >= 4:
+            die("index nesting too deep")
+        picked = []
+        skipped = []
+        for e in entries:
+            d = e.get("digest")
+            if not d:
+                skipped.append("entry without digest")
+                continue
+            ann = e.get("annotations") or {}
+            plat = e.get("platform") or {}
+            man = blob(d)
+            if man is None:
+                skipped.append("blob missing: " + d)
+                continue
+            if isinstance(man.get("manifests"), list):
+                return pick(man["manifests"], depth + 1)   # nested index
+            layers = man.get("layers")
+            has_layers = isinstance(layers, list) and len(layers) > 0
+            if ann.get("vnd.docker.reference.type") == "attestation-manifest" \
+               or (plat.get("architecture") == "unknown" and plat.get("os") == "unknown") \
+               or (not has_layers and "subject" in man):
+                skipped.append("attestation/provenance: " + d)
+                continue
+            if not has_layers:
+                skipped.append("no layers[]: %s keys=%s" % (d, sorted(man.keys())))
+                continue
+            rank = 0 if (plat.get("os", "linux") == "linux"
+                         and plat.get("architecture", "amd64") == "amd64") else 1
+            picked.append((rank, d, man))
+        if not picked:
+            die("no image manifest (non-empty layers[]) among %d index entries; "
+                "skipped: %s" % (len(entries), "; ".join(skipped) or "none"))
+        picked.sort(key=lambda x: x[0])
+        item = picked[0]
+        return item[1], item[2], skipped
+
+    want = []
     if "index.json" in members:
-        # OCI layout (docker save >= 23): index.json -> manifest -> layers
         index = json.load(t.extractfile("index.json"))
-        subject = index["manifests"][0]["digest"].replace(":", "/")
-        man = json.load(t.extractfile("blobs/" + subject))
-        want = ["blobs/" + l["digest"].replace(":", "/") for l in man["layers"]]
-    else:
-        # legacy layout: manifest.json at root, layers as <digest>.tar
+        entries = index.get("manifests")
+        if not isinstance(entries, list) or not entries:
+            die("index.json has no manifests[] (keys=%s)" % sorted(index.keys()))
+        digest, man, skipped = pick(entries, 0)
+        print("selected image manifest: %s" % digest)
+        for s in skipped:
+            print("skipped %s" % s)
+        for l in man["layers"]:
+            d = l["digest"]
+            p = d.replace(":", "/")
+            for cand in ("blobs/" + p, p, "blobs/" + p + ".tar", p + ".tar"):
+                if cand in members:
+                    want.append(cand)
+                    break
+            else:
+                die("layer blob missing from archive: " + d)
+    elif "manifest.json" in members:
         manifest = json.load(t.extractfile("manifest.json"))
-        want = []
-        for l in manifest[0]["Layers"]:
+        first = manifest[0] if isinstance(manifest, list) and manifest else {}
+        layers = first.get("Layers") if isinstance(first, dict) else None
+        if not isinstance(layers, list) or not layers:
+            die("manifest.json[0] has no Layers[] (keys=%s)" % sorted(first.keys()))
+        for l in layers:
             p = l.lstrip("./")
             want.append(p if p in members else p + ".tar")
+    else:
+        top = sorted(set("/".join(m.split("/")[:2]) for m in members))[:20]
+        die("unrecognized save archive: no index.json / manifest.json; "
+            "top members: %s" % top)
+
     for p in want:
         if p not in members:
-            raise SystemExit("layer member missing from save archive: " + p)
+            die("layer member missing from save archive: " + p)
     with open(out_list, "w") as fh:
         fh.write("\n".join(want) + "\n")
     print("layers: %d" % len(want))
 PYEOF
+
 
 while IFS= read -r layer; do
   [ -n "$layer" ] || continue
