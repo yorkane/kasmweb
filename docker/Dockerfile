@@ -31,6 +31,11 @@
 #     Chrome (docker/bin/wtk-chrome-local).
 #   * the taskbar is the minimal TC layout (tasklist + clock): no launcher, no
 #     system tray.
+#   * Sublime Text 4 (build 4200, pinned .deb + registration patch) ships as the
+#     DEFAULT OPEN-WITH target for text-ish types (/etc/xdg/mimeapps.list, system
+#     scope). It deliberately gets NO desktop icon - /defaults/desktop stays the
+#     managed 2-entry set; Sublime's role is the opener behind double-click, not
+#     an app-grid shortcut. See the sublime gate below and deploy.md 7.2.
 #   * the audio chain is unchanged: pulse app-share -> node relay (MP2) -> jsmpeg
 #     in the browser (jsmpeg MIT license kept in-package).
 #
@@ -81,9 +86,90 @@ RUN set -eu; \
 # /opt/wtk/web: render-nginx.py writes wtk-boot.js there at container start
 # (runtime-generated; never COPYed).
 
+# --- Sublime Text 4 (build 4200): download -> unpack -> register -> verify ----
+# Staging stage (FROM deps): the ~16MB deb and the ~53MB unpack tree live in THIS
+# stage only; release COPYs --from=sublime the product paths, so no deb and no
+# scratch reach the published image. Route = selkde handbook adapted for Alpine
+# (no apt, no ar, no dpkg), measured end-to-end by root on the 25880 probe
+# (2026-11-20). The base already carries gcompat (verified on the bare base:
+# apk info -e gcompat, /lib/ld-linux-x86-64.so.2 present) => the binary runs
+# with no bundled glibc; packages.txt pins gcompat explicitly so a base swap
+# cannot silently drop it. Fail-closed chain, any miss = build FAIL:
+#   1. pinned URL + --spider probe (same discipline as the apk index gate)
+#   2. sha256sum -c against the ARG-pinned deb digest (WTK_SUBLIME_SHA256)
+#   3. pure-python ar unpacker (docker/sublime/extract_deb.py) -> 3 members
+#   4. tar -xf data.tar.xz -C /  = deb-standard tree (no dpkg involved)
+#   5. PRE-patch binary sha256 assert, BEFORE any byte is touched
+#   6. registration patch (docker/sublime/patch_sublime.py), fail-closed, offset
+#      pinned via ARG WTK_SUBLIME_PATCH_OFFSET: pattern 0f b6 51 05 83 f2 01 ->
+#      c6 41 05 01 31 d2 90 exactly once @ 0x5b6283. The legacy 0x51 0C variant
+#      pattern hits ZERO times in 4200 - not shipped, do not add it.
+#   7. POST asserts: od 7-byte verbatim at the pinned offset, binary sha256 ==
+#      WTK_SUBLIME_PATCH_SHA256, "sublime_text --version" verbatim (no X needed),
+#      subl shim + desktop file + hicolor icons landed
+#   8. default-open: shipped mimeapps.list (comment header stripped here) becomes
+#      /etc/xdg/mimeapps.list; the desktop file MimeType=text/plain; line is
+#      rewritten to the full 13-type semicolon set (libfm Open With enumerates an
+#      entry for a type only when its MimeType lists that type). The two sets are
+#      compared 1:1 as sorted sets parsed from the two files.
+# License: NO key file is pre-seeded (fake keys ship nothing) - the patch IS the
+# registration mechanism. A real License.sublime_license may be placed at
+# /config/.config/sublime-text/License.sublime_license and coexists (deploy.md).
+FROM deps AS sublime
+ARG WTK_SUBLIME_SHA256=79a687ffd749004eb4360243dc2133a68bbc8243f890ff3f8f5b00835870c7ea
+ARG WTK_SUBLIME_PATCH_SHA256=f145efb381d4cb8b5129cbfa1f180274cc0b9d39d7b05c88b9095d43a2ff9c36
+ARG WTK_SUBLIME_PATCH_OFFSET=0x5b6283
+ARG WTK_SUBLIME_URL=https://download.sublimetext.com/sublime-text_build-4200_amd64.deb
+COPY sublime/extract_deb.py /opt/wtk/bin/wtk-sublime-extract-deb.py
+COPY sublime/patch_sublime.py /opt/wtk/bin/wtk-sublime-patch.py
+COPY sublime/mimeapps.list /opt/wtk-sublime-mimeapps.ship
+RUN set -eu; \
+    chmod 0755 /opt/wtk/bin/wtk-sublime-extract-deb.py /opt/wtk/bin/wtk-sublime-patch.py; \
+    cd /tmp; \
+    wget -q --timeout=30 --spider "$WTK_SUBLIME_URL" \
+      || { echo "sublime: FATAL: pinned URL unreachable: $WTK_SUBLIME_URL" >&2; exit 3; }; \
+    wget -q --timeout=60 -O sublimetext.deb "$WTK_SUBLIME_URL"; \
+    printf '%s  %s\n' "$WTK_SUBLIME_SHA256" sublimetext.deb | sha256sum -c -; \
+    python3 /opt/wtk/bin/wtk-sublime-extract-deb.py sublimetext.deb /tmp/debx >/dev/null; \
+    test -s /tmp/debx/data.tar.xz; \
+    tar -xf /tmp/debx/data.tar.xz -C /; \
+    BIN=/opt/sublime_text/sublime_text; \
+    test -x "$BIN"; chmod 0755 "$BIN"; \
+    pre=$(sha256sum "$BIN" | awk '{print $1}'); \
+    want_pre='c312e4bd998d7b54a325aabccd7c39becefb3e40229b3909cfd9d9c496984a50'; \
+    [ "$pre" = "$want_pre" ] || { echo "sublime: FATAL: pre-patch sha256 $pre != $want_pre" >&2; exit 1; }; \
+    echo "sublime: pre-patch sha256 verified ($pre)"; \
+    python3 /opt/wtk/bin/wtk-sublime-patch.py "$BIN" --expect-offset "$WTK_SUBLIME_PATCH_OFFSET"; \
+    od -An -tx1 -j $(($WTK_SUBLIME_PATCH_OFFSET)) -N7 "$BIN" | tr -d ' \n' | grep -q '^c641050131d290$' \
+      || { echo "sublime: FATAL: post bytes at $WTK_SUBLIME_PATCH_OFFSET are not c641050131d290" >&2; exit 1; }; \
+    post=$(sha256sum "$BIN" | awk '{print $1}'); \
+    [ "$post" = "$WTK_SUBLIME_PATCH_SHA256" ] || { echo "sublime: FATAL: post-patch sha256 $post != $WTK_SUBLIME_PATCH_SHA256" >&2; exit 1; }; \
+    ver=$("$BIN" --version 2>&1 | head -n1); \
+    [ "$ver" = "Sublime Text Build 4200" ] || { echo "sublime: FATAL: --version = [$ver]" >&2; exit 1; }; \
+    test -x /usr/bin/subl; \
+    test -s /usr/share/applications/sublime_text.desktop; \
+    test -s /usr/share/icons/hicolor/48x48/apps/sublime-text.png; \
+    grep -q '^Exec=/opt/sublime_text/sublime_text %F$' /usr/share/applications/sublime_text.desktop; \
+    grep -q '^Icon=sublime-text$' /usr/share/applications/sublime_text.desktop; \
+    apk info -e gcompat >/dev/null; \
+    sed '/^#/d' /opt/wtk-sublime-mimeapps.ship > /etc/xdg/mimeapps.list; \
+    chmod 0644 /etc/xdg/mimeapps.list; \
+    types=$(sed -n '/^\[Default Applications\]/,$p' /etc/xdg/mimeapps.list | grep -v '^\[' | grep -v '^$' | cut -d= -f1 | LC_ALL=C sort); \
+    mime=$(printf '%s;' $types); \
+    sed -i "s|^MimeType=.*|MimeType=$mime|" /usr/share/applications/sublime_text.desktop; \
+    dtypes=$(sed -n 's/^MimeType=//p' /usr/share/applications/sublime_text.desktop | tr ';' '\n' | grep -v '^$' | LC_ALL=C sort); \
+    [ "$types" = "$dtypes" ] || { echo 'sublime: FATAL: mimeapps set != desktop MimeType set' >&2; exit 1; }; \
+    n=$(printf '%s\n' "$types" | wc -l); \
+    [ "$n" -ge 13 ] || { echo "sublime: FATAL: default-open type set = $n, want >= 13" >&2; exit 1; }; \
+    echo "sublime: default-open set = $n types, mimeapps <-> desktop MimeType 1:1"; \
+    mv /tmp/sublimetext.deb /tmp/debx /opt/wtk-build-residue/; \
+    echo 'sublime: stage complete (deb + unpack scratch archived in /opt/wtk-build-residue, zero rm)'
+
 FROM deps AS release
 ARG WTK_VERSION=0.1.0
 ARG WTK_BUILD_DATE=unknown
+ARG WTK_SUBLIME_SHA256=79a687ffd749004eb4360243dc2133a68bbc8243f890ff3f8f5b00835870c7ea
+ARG WTK_SUBLIME_PATCH_SHA256=f145efb381d4cb8b5129cbfa1f180274cc0b9d39d7b05c88b9095d43a2ff9c36
 # Lineage note: the 9e0c6fba... value was the upstream native-default/run byte
 # state. This repository ships the same functional payload with comment-path
 # corrections only (Xvnc argv, geometry block, generation order untouched);
@@ -125,6 +211,14 @@ COPY s6/svc-wtk-audio/ /etc/s6-overlay/s6-rc.d/svc-wtk-audio/
 COPY s6/init-nginx/ /etc/s6-overlay/s6-rc.d/init-nginx/
 COPY s6/init-wtk-appshare/ /etc/s6-overlay/s6-rc.d/init-wtk-appshare/
 COPY s6/s6-apply.sh /opt/wtk/bin/s6-apply.sh
+COPY sublime/extract_deb.py /opt/wtk/bin/wtk-sublime-extract-deb.py
+COPY sublime/patch_sublime.py /opt/wtk/bin/wtk-sublime-patch.py
+COPY sublime/mimeapps.list /opt/wtk/sublime/mimeapps.list.ship
+COPY --from=sublime /opt/sublime_text /opt/sublime_text
+COPY --from=sublime /etc/xdg/mimeapps.list /etc/xdg/mimeapps.list
+COPY --from=sublime /usr/bin/subl /usr/bin/subl
+COPY --from=sublime /usr/share/applications/sublime_text.desktop /usr/share/applications/sublime_text.desktop
+COPY --from=sublime /usr/share/icons/hicolor /usr/share/icons/hicolor
 COPY s6/svc-de/run /etc/s6-overlay/s6-rc.d/svc-de/run
 
 # Modes per manifest (COPY keeps context bits; we enforce, never trust):
@@ -132,6 +226,7 @@ RUN set -eu; \
     chmod 0755 /opt/wtk/bin/wtk-launch /opt/wtk/bin/wtk-xauth-seed \
                /opt/wtk/bin/wtk-chrome-local \
                /opt/wtk/bin/healthcheck.sh /opt/wtk/bin/s6-apply.sh \
+               /opt/wtk/bin/wtk-sublime-extract-deb.py /opt/wtk/bin/wtk-sublime-patch.py \
                /opt/wtk/nginx/render-nginx.py /defaults/autostart /defaults/startwm.sh \
                /defaults/desktop/Chrome.desktop /defaults/desktop/Chrome-Local.desktop; \
     chmod 0644 /opt/wtk/audio/relay.js /opt/wtk/audio/README.md /opt/wtk/audio/web/* \
@@ -139,6 +234,7 @@ RUN set -eu; \
                /defaults/menu.xml /opt/wtk/windowing/tint2/tint2rc \
                /etc/pulse/default.pa.d/20-wtk-app-share.pa \
                /etc/fonts/conf.d/99-kasmweb-cjk.conf \
+               /opt/wtk/sublime/mimeapps.list.ship \
                /opt/wtk/windowing/desktop/libfm.conf \
                /opt/wtk/windowing/desktop/icons/*.png; \
     for d in svc-kasmvnc svc-de svc-nginx svc-pulseaudio svc-wtk-audio init-nginx init-wtk-appshare; do \
@@ -209,6 +305,45 @@ RUN set -eu; \
     test "$n" = 2 || { echo "gate desktop: FATAL /defaults/desktop has $n entries [$names], not exactly 2" >&2; exit 1; }; \
     test "$names" = "Chrome-Local.desktop Chrome.desktop " || { echo "gate desktop: FATAL /defaults/desktop set = [$names], want exactly [Chrome-Local.desktop Chrome.desktop ]" >&2; exit 1; }; \
     echo "gate desktop: exact set {Chrome.desktop, Chrome-Local.desktop} (n=2) + both Exec lines verbatim + 0755 + Icon PNG exists + local launcher executable; up non-empty; shebang byte0 - OK"
+
+# --- Sublime release gate (final image, verbatim) ------------------------------
+# The sublime stage already fail-closed verified download sha, pre/post binary
+# sha, patch bytes and the 1:1 type sets. THIS gate re-asserts the product state
+# in the final image from the contract constants (same style as the native gate:
+# literals pinned here, not carried over from the stage): binaries on PATH,
+# --version verbatim, post-patch sha + 7 bytes at 0x5b6283, desktop-file Exec
+# verbatim + full MimeType line, /etc/xdg/mimeapps.list exact 13-type coverage,
+# gcompat present. The DEBIAN/control postinst never ran (tar-extract, by
+# design): update-desktop-database is absent from this image, and the icon
+# resolves through the hicolor filesystem layout without a cache - verified on
+# the probe (2026-11-20). No desktop icon ships for Sublime (the /defaults/desktop
+# gate above pins exactly {Chrome, Chrome-Local}): Sublime is the DEFAULT OPENER
+# behind double-click, not an app-grid shortcut - deliberate design, deploy.md.
+RUN set -eu; \
+    want_post="f145efb381d4cb8b5129cbfa1f180274cc0b9d39d7b05c88b9095d43a2ff9c36"; \
+    test -x /opt/sublime_text/sublime_text || { echo "gate sublime: /opt/sublime_text/sublime_text missing/not executable" >&2; exit 1; }; \
+    test -x /usr/bin/subl || { echo "gate sublime: /usr/bin/subl missing (deb usr/bin/subl shim)" >&2; exit 1; }; \
+    ver=$(/opt/sublime_text/sublime_text --version 2>&1 | head -n1); \
+    echo "gate sublime: --version -> [$ver]"; \
+    [ "$ver" = "Sublime Text Build 4200" ] || { echo "gate sublime: FAIL - version [$ver] != 'Sublime Text Build 4200'" >&2; exit 1; }; \
+    post=$(sha256sum /opt/sublime_text/sublime_text | awk '{print $1}'); \
+    [ "$post" = "$want_post" ] || { echo "gate sublime: FAIL - binary sha256 $post != registered-patch state $want_post" >&2; exit 1; }; \
+    od -An -tx1 -j $((0x5b6283)) -N7 /opt/sublime_text/sublime_text | tr -d ' \n' | grep -q '^c641050131d290$' \
+      || { echo "gate sublime: FAIL - patch bytes absent at 0x5b6283" >&2; exit 1; }; \
+    DESK=/usr/share/applications/sublime_text.desktop; \
+    test -s "$DESK" || { echo "gate sublime: $DESK missing" >&2; exit 1; }; \
+    grep -q '^Exec=/opt/sublime_text/sublime_text %F$' "$DESK" || { echo "gate sublime: desktop Exec line changed" >&2; exit 1; }; \
+    want_mime='MimeType=application/javascript;application/json;application/xml;text/css;text/html;text/javascript;text/markdown;text/plain;text/x-c;text/x-python;text/x-shellscript;text/xml;text/yaml;'; \
+    grep -qxF "$want_mime" "$DESK" || { echo "gate sublime: desktop MimeType line != the pinned 13-type set" >&2; exit 1; }; \
+    test "$(sed -n 's/^MimeType=//p' "$DESK" | tr ';' '\n' | grep -c . )" = 13 || { echo "gate sublime: desktop MimeType count != 13" >&2; exit 1; }; \
+    test "$(grep -c '=sublime_text.desktop$' /etc/xdg/mimeapps.list)" = 13 || { echo "gate sublime: /etc/xdg/mimeapps.list does not map exactly 13 types to sublime_text.desktop" >&2; exit 1; }; \
+    grep -q '^\[Default Applications\]$' /etc/xdg/mimeapps.list || { echo "gate sublime: mimeapps.list lacks [Default Applications]" >&2; exit 1; }; \
+    for t in text/plain application/json text/x-shellscript text/x-c text/x-python text/markdown text/yaml application/xml text/xml application/javascript text/javascript text/css text/html; do \
+      grep -q "^$t=sublime_text.desktop$" /etc/xdg/mimeapps.list || { echo "gate sublime: mimeapps.list missing $t" >&2; exit 1; }; \
+    done; \
+    apk info -e gcompat >/dev/null || { echo "gate sublime: gcompat missing - Sublime (glibc binary) cannot load" >&2; exit 1; }; \
+    test -s /usr/share/icons/hicolor/48x48/apps/sublime-text.png || { echo "gate sublime: hicolor icon missing (Icon=sublime-text resolution)" >&2; exit 1; }; \
+    echo "gate sublime: subl+binary on PATH (Build 4200 verbatim), sha+bytes = registered-patch state, desktop Exec/MimeType 13-type verbatim, mimeapps.list 13/13, gcompat present - PASS"
 
 # --- libfm quick_exec merge + desktop autostart contract ----------------------
 # The pcmanfm apk ships /etc/xdg/libfm/libfm.conf; we merge ONLY the injected key
@@ -284,6 +419,8 @@ RUN set -eu; \
     gate /opt/wtk/bin/healthcheck.sh; \
     gate /opt/wtk/bin/s6-apply.sh; \
     gate /opt/wtk/nginx/render-nginx.py; \
+    gate /opt/wtk/bin/wtk-sublime-extract-deb.py; \
+    gate /opt/wtk/bin/wtk-sublime-patch.py; \
     gate /defaults/autostart; \
     gate /defaults/startwm.sh; \
     gate /etc/s6-overlay/s6-rc.d/svc-kasmvnc/run; \

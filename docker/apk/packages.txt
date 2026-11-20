@@ -5,6 +5,15 @@
 # 2026-11-20 新增容器内浏览器通道 chromium：112.0.5615.165-r0（community，
 # apk policy 实测；安装后 ~245MB）。运行期依赖（gtk+3.0 / mesa-dri-gallium /
 # nss / xdg-utils / font-opensans 等）由 apk 依赖解析自动带入，不在此另列。
+# 2026-11-20 Sublime Text 4 线显式钉两包（防基座/依赖树漂移）：
+#   gcompat   = Sublime（glibc 二进制）的加载层；a317 基座实测自带
+#               （apk info -e gcompat + /lib/ld-linux-x86-64.so.2 在），此处显式
+#               列出保证基座换 digest 后构建门禁依然逐字可断言。
+#   xdg-utils = 提供 xdg-open / xdg-mime / xdg-settings（基座不带；现镜像里由
+#               chromium 依赖带入。默认打开验收命令 = xdg-mime query default，
+#               属于 Sublime 线的直接契约，不依赖别人带）。
+gcompat
+xdg-utils
 chromium
 tint2
 pcmanfm

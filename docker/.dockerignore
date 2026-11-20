@@ -30,3 +30,7 @@
 !pulse/20-wtk-app-share.pa
 !s6/
 !windowing/
+!sublime/
+!sublime/extract_deb.py
+!sublime/patch_sublime.py
+!sublime/mimeapps.list

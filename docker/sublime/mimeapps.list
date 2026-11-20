@@ -1,0 +1,30 @@
+# /etc/xdg/mimeapps.list - system-scope default applications for this image.
+#
+# Installed by the Sublime build layer (the Dockerfile strips this comment
+# block; the data lines below land verbatim at /etc/xdg/mimeapps.list, and the
+# gate asserts the [Default Applications] set verbatim). This is the ONLY
+# default-open mechanism: measured on kwst-probe (2026-11-20), xdg-mime /
+# xdg-open and libfm (pcmanfm double-click) resolve system-wide defaults from
+# here for the desktop user abc (uid 1000, HOME=/config, no user mimeapps.list),
+# so NO $HOME/.config/mimeapps.list seed ships - unlike the two managed desktop
+# icons (force-seed every start), a user (or session) that sets its own default
+# keeps full control; per-seat override is the standard XDG chain.
+#
+# The type set below MUST stay 1:1 with the MimeType= line written into
+# /usr/share/applications/sublime_text.desktop (same layer; the gate asserts
+# both sides). libfm's "Open With" enumerates an entry for a type only when the
+# entry's MimeType lists that type, hence the desktop-file expansion.
+[Default Applications]
+text/plain=sublime_text.desktop
+application/json=sublime_text.desktop
+text/x-shellscript=sublime_text.desktop
+text/x-c=sublime_text.desktop
+text/x-python=sublime_text.desktop
+text/markdown=sublime_text.desktop
+text/yaml=sublime_text.desktop
+application/xml=sublime_text.desktop
+text/xml=sublime_text.desktop
+application/javascript=sublime_text.desktop
+text/javascript=sublime_text.desktop
+text/css=sublime_text.desktop
+text/html=sublime_text.desktop

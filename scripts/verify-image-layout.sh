@@ -24,6 +24,12 @@
 #     gate; equality with the startup size must never be asserted)
 #   5 /opt/wtk/audio/web/jsmpeg.min.js and LICENSE-jsmpeg.txt are in the package
 #   6 /opt/wtk/windowing/desktop/icons/chrome.png is a real PNG
+#   7 Sublime Text 4 product state: /usr/bin/subl + /opt/sublime_text/sublime_text
+#     present and the binary sha256 == the frozen POST-registration-patch hash
+#     (a deb-extracted raw, half-patched, or other-build binary FAILS),
+#     /etc/xdg/mimeapps.list maps exactly the 13 pinned types to
+#     sublime_text.desktop, and /usr/share/applications/sublime_text.desktop
+#     carries the verbatim Exec line + the verbatim 13-type MimeType line.
 #
 # Layouts handled: (A) OCI 'docker save' (docker 23+: index.json ->
 # blobs/sha256/*), (B) the buildx --load artifact the GitHub runner stores
@@ -356,6 +362,50 @@ if [ -f "$C" ] && [ "$(od -An -tx1 -N8 "$C" | tr -d ' \n')" = "89504e470d0a1a0a"
   ok chrome_png "/opt/wtk/windowing/desktop/icons/chrome.png has PNG magic"
 else
   ko chrome_png "/opt/wtk/windowing/desktop/icons/chrome.png missing or not PNG"
+fi
+
+# --- 7: Sublime Text 4 (build 4200) product state -----------------------------
+# The registration patch is byte-locked: the shipped binary must hash to the
+# POST-patch constant, i.e. the image carries the registered build and nothing
+# in between (deb-extracted raw / half-patched / other build) can pass. The
+# desktop file is asserted with BOTH the verbatim Exec line and the verbatim
+# 13-type MimeType line (the release gate rewrites it from the deb-original
+# "text/plain;"); /etc/xdg/mimeapps.list must map exactly the same 13 types.
+SB="$ROOT/opt/sublime_text/sublime_text"
+SUB="$ROOT/usr/bin/subl"
+if [ -f "$SUB" ] && [ -f "$SB" ]; then
+  ok sublime_binaries "/usr/bin/subl + /opt/sublime_text/sublime_text present in rootfs"
+  WANT_POST="f145efb381d4cb8b5129cbfa1f180274cc0b9d39d7b05c88b9095d43a2ff9c36"
+  got_post=$(sha256sum "$SB" | awk '{print $1}')
+  if [ "$got_post" = "$WANT_POST" ]; then
+    ok sublime_registered "sublime_text sha256 = post-registration-patch state (registered build 4200)"
+  else
+    ko sublime_registered "sublime_text sha256 $got_post != frozen post-patch $WANT_POST (unpatched / not build 4200)"
+  fi
+else
+  ko sublime_binaries "/usr/bin/subl or /opt/sublime_text/sublime_text missing (Sublime not installed)"
+  ko sublime_registered "sublime binary absent; registration state unverifiable"
+fi
+MIMEA="$ROOT/etc/xdg/mimeapps.list"
+need_types="application/javascript application/json application/xml text/css text/html text/javascript text/markdown text/plain text/x-c text/x-python text/x-shellscript text/xml text/yaml"
+if [ -f "$MIMEA" ]; then
+  miss=""
+  for t in $need_types; do grep -q "^$t=sublime_text.desktop$" "$MIMEA" || miss="$miss $t"; done
+  mapped=$(grep -c "=sublime_text.desktop$" "$MIMEA")
+  if [ -z "$miss" ] && [ "$mapped" = "13" ]; then
+    ok sublime_mimeapps "/etc/xdg/mimeapps.list maps exactly the 13 pinned types to sublime_text.desktop"
+  else
+    ko sublime_mimeapps "mimeapps.list mapped=$mapped (want 13); missing:${miss:-none}"
+  fi
+else
+  ko sublime_mimeapps "/etc/xdg/mimeapps.list missing (no system default-open policy)"
+fi
+SD="$ROOT/usr/share/applications/sublime_text.desktop"
+WANT_MIME="MimeType=application/javascript;application/json;application/xml;text/css;text/html;text/javascript;text/markdown;text/plain;text/x-c;text/x-python;text/x-shellscript;text/xml;text/yaml;"
+if [ -f "$SD" ] && grep -qxF "Exec=/opt/sublime_text/sublime_text %F" "$SD" && grep -qxF "$WANT_MIME" "$SD"; then
+  ok sublime_desktop "sublime_text.desktop: Exec verbatim + MimeType = 13-type set (libfm Open With)"
+else
+  ko sublime_desktop "sublime_text.desktop missing, Exec changed, or MimeType not the 13-type set"
 fi
 
 if [ "$fail_n" -gt 0 ]; then

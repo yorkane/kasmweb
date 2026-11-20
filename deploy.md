@@ -176,7 +176,7 @@ curl -s -o /dev/null -D - 'http://127.0.0.1:25320/?desktop=chrome-1' | sed -n '1
 | 镜像 | `ghcr.io/yorkane/kasmweb:<tag>` | 产品契约 |
 | 发布流水线 | `.github/workflows/publish.yml`：tag `v*` → semver 三档 + tag + sha；`main` → `latest` / `main` / `sha`（HEAD 已打 tag 时跳过分支构建）；`workflow_dispatch` → 自定义 tag | `publish.yml:17-28,48-61` |
 | 构建上下文 | `./docker`，Dockerfile = `./docker/Dockerfile`，构建后 `load: true` 供自检 | `publish.yml:90-101` |
-| 构建后自检 | `bash scripts/verify-image-layout.sh <tag>`（离线 `docker save` + tar 解包，**不 run 不 create**）十三项自检：桌面二件集合 + 两个 `Exec` 逐字 + 容器内启动器可执行 + `/usr/bin/chromium-browser` 存在 + tint2 + svc argv + healthcheck 门 + jsmpeg + 图标 PNG | `publish.yml:106-115`，`scripts/verify-image-layout.sh:1-36` |
+| 构建后自检 | `bash scripts/verify-image-layout.sh <tag>`（离线 `docker save` + tar 解包，**不 run 不 create**）十七项自检：桌面二件集合 + 两个 `Exec` 逐字 + 容器内启动器可执行 + `/usr/bin/chromium-browser` 存在 + tint2 + svc argv + healthcheck 门 + jsmpeg + 图标 PNG + Sublime 双二进制/post-sha/mimeapps 13 型/desktop 行（§7.2） | `publish.yml:106-115`，`scripts/verify-image-layout.sh:1-36` |
 | 两段构建 | `FROM <base> AS deps`（apk 层）+ `FROM deps AS release`（内容层） | `docker/Dockerfile:42,84` |
 | 基座（钉 digest） | `ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d`，LABEL 记 name=`:alpine317` | `docker/Dockerfile:40,97-98` |
 | 版本标签 | `ARG WTK_VERSION=0.1.0`（两段共用） | `docker/Dockerfile:43,85` |
@@ -193,7 +193,7 @@ docker build -f docker/Dockerfile --build-arg WTK_VERSION=0.1.0 \
 docker build -f docker/Dockerfile \
   --build-arg WTK_BASE=webtop-kasmvnc-base:alpine317-527bb89e --pull=false \
   -t kasmweb:local docker
-bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 十三项布局自检
+bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 十七项布局自检
 ```
 
 已发布标签 = `latest` / `v0.1.0` / `0.1.0`；后续重建会重推同名标签，digest 以 CI 实际产出为准。
@@ -241,7 +241,17 @@ bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 十三项
     它能渲染（缺库 / sandbox / 字体配置洞都会在这里出局）。构建环境无 X 无 GPU、
     `/dev/shm` 仅 64MB ⇒ headless=new + `--disable-gpu` + `--disable-dev-shm-usage`。
     **硬门禁，未降级**（`Dockerfile:454-469`）。
-11. **零 rm 纪律**：门禁止物进 `/opt/wtk-build-residue` 保留，`/var/cache/apk` 不清理。
+11. **Sublime Text 门禁（两层）**：暂存阶段 `sublime:` 链 = 钉 URL `--spider` 可达 →
+    deb `sha256sum -c` → tar 解包 → **pre-patch 二进制 sha256 逐字断言（补丁前）** →
+    注册补丁（命中数=1 + 偏移=`0x5b6283` 双钉，fail-closed）→ `od` 复核 post 7 字节 +
+    post sha256 逐字断言 → `--version` 逐字 `Sublime Text Build 4200` → mimeapps/desktop
+    类型集合 1:1（≥13）→ 留证 `mv` 进 residue（零 rm）。release 复断言层 `gate sublime:` =
+    `subl` + `sublime_text` 可执行、版本逐字、sha256+补丁字节 = 已注册态、desktop 文件
+    `Exec` / `MimeType` 逐字（13 型）、`/etc/xdg/mimeapps.list` 13 行逐类型、`gcompat` 在场、
+    hicolor 图标在位（`Dockerfile:118-166,322-343`）。负控实测（上下文副本，仓库树零改动，
+    2026-11-20）：`WTK_SUBLIME_PATCH_OFFSET` 改成 0x5b6284 → 构建 rc=1，失败行逐字 =
+    `FAIL: offset=0x5b6283, want 0x5b6284`（补丁器点名偏移强绑定生效）。
+12. **零 rm 纪律**：门禁止物进 `/opt/wtk-build-residue` 保留，`/var/cache/apk` 不清理。
 
 镜像内容层的完整 COPY 落位表由镜像侧文档维护（`docker/` 树 = 镜像内容层（CI 构建上下文即
 本目录），落位见 `Dockerfile:102-128`）。
@@ -626,6 +636,115 @@ tint2 的任务按钮 / 时钟 / 提示字体本来就是 `Noto Sans CJK SC 9`
 `ttf-liberation`；基座自带 `font-noto` 无 CJK），见 `docker/apk/packages.txt:12-15`。
 `docker/.dockerignore` 的 allowlist 已含 `!fonts/` 与 `!fonts/99-kasmweb-cjk.conf`
 （`.dockerignore:26-27`）—— 漏了这两行 conf 就进不了构建上下文。
+
+### 7.2 默认打开器 = Sublime Text 4（build 4200；2026-11-20 新增）
+
+镜像内置 **Sublime Text 4 build 4200**，定位是**双击文本文件时的默认打开器**，不是桌面启动器：
+`/defaults/desktop` 的托管图标集合**不变**（恰好 Chrome + Chrome-Local，门禁逐字断言），
+Sublime **刻意不给桌面图标**——它在双击背后工作，加入图标网格会稀释既定的双浏览器入口。
+
+**安装来源（钉版钉 sha）**
+
+| 项 | 值 |
+|---|---|
+| 下载 URL | `https://download.sublimetext.com/sublime-text_build-4200_amd64.deb`（构建 ARG `WTK_SUBLIME_URL`） |
+| deb sha256 | `79a687ffd749004eb4360243dc2133a68bbc8243f890ff3f8f5b00835870c7ea` |
+| 二进制 pre-patch sha256 | `c312e4bd998d7b54a325aabccd7c39becefb3e40229b3909cfd9d9c496984a50`（**打补丁前**断言） |
+| 二进制 post-patch sha256 | `f145efb381d4cb8b5129cbfa1f180274cc0b9d39d7b05c88b9095d43a2ff9c36` |
+| 落位 | `/opt/sublime_text/`（含 `sublime_text`、`crash_handler`、自带 `Lib/` `Packages/`）、`/usr/bin/subl`、`/usr/share/applications/sublime_text.desktop`、`/usr/share/icons/hicolor/*/apps/sublime-text.png` |
+
+镜像里没有 `ar` 也没有 `dpkg`，解包用仓库自带的纯 python ar 读取器
+`docker/sublime/extract_deb.py`（落镜像 `/opt/wtk/bin/wtk-sublime-extract-deb.py`），随后
+`tar -xf data.tar.xz -C /` 就是 deb 的标准安装树。**不跑 DEBIAN/postinst**（那是 dpkg 的
+前端脚本，本镜像无 dpkg 语义）：它只做 `gtk-update-icon-cache` / `desktop-file-utils` 的
+桌面数据库刷新，二者都不在本镜像（`update-desktop-database` 不存在），图标按 hicolor
+文件系统布局解析，探针实测无需缓存。
+
+安装走**独立的 `sublime` 暂存 stage**（`FROM deps`），成品路径由 `COPY --from=sublime`
+进 release：~16MB 的 deb 与 ~53MB 的解包中间树留在暂存层，不进发布镜像的层链；
+构建留证按零 rm 纪律 `mv` 进 `/opt/wtk-build-residue/`。
+
+**注册补丁（与偏移强绑定，fail-closed）**
+
+`docker/sublime/patch_sublime.py`（落镜像 `/opt/wtk/bin/wtk-sublime-patch.py`）做 7 字节原位替换：
+
+```
+pre  0f b6 51 05 83 f2 01   ->   post  c6 41 05 01 31 d2 90
+唯一命中 @ 0x5b6283 (= 5988995)
+```
+
+断言链，任一不成立 = rc1 = 构建失败：**命中数必须恰好 1** → **偏移必须等于 ARG
+`WTK_SUBLIME_PATCH_OFFSET`（默认 `0x5b6283`）** → 写入后**复读**校验（旧串 0 次 / 新串 1 次 /
+新串偏移与旧串一致）→ 构建层再独立复核 `od` 逐字节 `c641050131d290` + 全文件 sha256 ==
+post 常量。补丁与版本**强绑定**：换 build 就换偏移与 sha 常量，模式命中数不为 1 直接出局，
+没有「宽松匹配 + 静默跳过」这条路。旧式 `0x51 0C` 变体在 4200 上**命中 0 次**，不收录、勿加。
+
+注册效果实证（探针 25881，桌面用户 abc uid=1000）：未打补丁窗口标题 =
+`/etc/hostname - Sublime Text (UNREGISTERED)`；打补丁后 = `/etc/hostname - Sublime Text`
+（`(UNREGISTERED)` 消失；无 selkde 线上那个 SUDO 后缀——本镜像会话用户是 uid 1000 不是 root）。
+
+**许可通道（不预置任何 key）**
+
+镜像**不携带任何许可证文件**，也不伪造：注册状态完全由上面的二进制补丁达成。如果你有正式的
+`License.sublime_license`，放进容器 `/config/.config/sublime-text/License.sublime_license`
+（即 `/config` 卷的 `.config/sublime-text/` 下）即可，与补丁**双通道并存**、互不冲突；
+这是纯部署侧动作，镜像与门禁都不依赖它存在。
+
+**默认打开范围（13 个类型，两处同步）**
+
+系统级 `/etc/xdg/mimeapps.list`（`[Default Applications]`，源 = `docker/sublime/mimeapps.list`，
+构建时剥注释后原样装入）与 `/usr/share/applications/sublime_text.desktop` 的 `MimeType=` 行
+覆盖**同一集合**（构建门禁按解析后的有序集合逐字比对，1:1 才放行）：
+
+| 通道 | 语义 |
+|---|---|
+| `/etc/xdg/mimeapps.list` | `xdg-open` / pcmanfm 双击的**默认应用**裁决（系统 scope，逐 seat 可被用户 `~/.config/mimeapps.list` 覆盖） |
+| desktop 的 `MimeType=` | deb 原版只有 `text/plain;`，libfm「打开方式」子菜单按该列表枚举条目 ⇒ 扩到同集合 |
+
+类型集合：`text/plain`、`application/json`、`text/x-shellscript`、`text/x-c`、`text/x-python`、
+`text/markdown`、`text/yaml`、`application/xml`、`text/xml`、`application/javascript`、
+`text/javascript`、`text/css`、`text/html`。
+
+**为什么没有 `$HOME/.config` 播种**：实测（探针 kwst-probe，2026-11-20）本镜像的
+`xdg-mime query default` / `xdg-open` / libfm 双击在**只有** `/etc/xdg/mimeapps.list`、
+桌面用户 abc 无用户级 mimeapps.list 的情况下就已解析到 `sublime_text.desktop` ⇒
+不需要用户目录播种。这与两个桌面图标的**托管 force-seed 语义刻意相反**：
+图标是产品必须交付的入口，每次启动覆盖式重播（`cp -f` + `chmod 0755`，§6.5 末）；
+默认打开器是**用户可主张的偏好**，走标准 XDG 逐 seat 覆盖链，用户改了自己的默认值
+就不会被镜像改回去。取舍写明：代价是老卷上「用户先前手工设过默认」的情形镜像不接管。
+
+**门禁与自检**
+
+- 构建期两层：`sublime` 阶段（sha → 解包 → pre 断言 → 补丁 → od + post 断言 →
+  `--version` 逐字 `Sublime Text Build 4200` → 1:1 类型集合）+ release 的
+  `gate sublime:`（成品镜像内复断言：`subl` 与 `sublime_text` 可执行、版本逐字、
+  sha256 与补丁字节、desktop `Exec` / `MimeType` 逐字、mimeapps 13 行、`gcompat` 在场）。
+- 离线布局自检 `scripts/verify-image-layout.sh` 新增第 7 组四项：`/usr/bin/subl` 在、
+  `/etc/xdg/mimeapps.list` 13 行逐类型、`sublime_text.desktop` 在位（含 Exec 行）。
+- 运行时快速核验（在跑着的容器里）：
+
+```bash
+docker exec <ctr> sh -c '/opt/sublime_text/sublime_text --version'   # Sublime Text Build 4200
+docker exec <ctr> sh -c 'grep -c "=sublime_text.desktop$" /etc/xdg/mimeapps.list'   # 13
+docker exec -u abc <ctr> sh -c 'HOME=/config xdg-mime query default text/plain'      # sublime_text.desktop
+```
+
+**升级旧卷 / 既有容器**：镜像换新版即生效（补丁与默认打开策略都在镜像里）。
+已有 `/config` 卷**不需要**手工步骤；只有当用户在卷里留下过用户级 `mimeapps.list`
+时，该文件的偏好会覆盖系统默认（预期行为）。
+
+**已知限制（Sublime 线）**
+
+1. **gcompat 兼容层**：二进制是 glibc 构建，靠基座的 gcompat 加载（`apk info -e gcompat`
+   + `/lib/ld-linux-x86-64.so.2`，packages.txt 显式钉 `gcompat` 防漂移）。兼容层 ≠ 原生 glibc，
+   未来版本若引入 gcompat 覆盖不到的符号，构建期 `--version` 与 release 门禁会出局，不会带病发布。
+2. **软件渲染**：KasmVNC 无 GPU 加速，Sublime 走软件绘制（与容器内 Chromium 同条件）。
+3. **无桌面图标**（设计选择）：入口 = 双击文本文件 / `subl <file>` / Open With 菜单。
+4. **不跑 postinst**：无 dpkg 语义，桌面数据库工具不在镜像内，图标解析依赖 hicolor 目录布局。
+5. **默认打开只覆盖上面 13 类**：二进制、图片、pdf 等无默认应用（`xdg-open` 会回落 / 拒绝）。
+6. **注册补丁与 build 4200 强绑定**：升 build 必须重取偏移与两个 sha；旧 `0x51 0C` 变体在 4200 命中 0 次。
+7. **`Sublime Text` 裸标题瞬态窗**（约 10x10，无文件名）会与编辑主窗同时出现在 `xdotool search` 结果里：
+   验收必须钉**带文件名**的 `… - Sublime Text` 窗，裸标题窗不作注册证据（实测记录）。
 
 ## 8. 最简音频
 

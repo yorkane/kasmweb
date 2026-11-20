@@ -33,6 +33,13 @@
   `^Chromium 112.` 逐字断版本，并跑一次真 headless 渲染 smoke（`--dump-dom about:blank`）。
 - **最简任务栏** = tint2 单面板 `panel_size = 100% 30` + `panel_items = TC`
   （任务列表 + 时钟；无 launcher、无托盘，出现 `systray_` / `launcher_` 键即构建 FAIL）。
+- **默认打开器 = Sublime Text 4（build 4200，钉版钉 sha）**：.deb 纯 python 解包（镜像无 ar/dpkg）+
+  7 字节注册补丁（唯一命中 @0x5b6283 强绑定）落 `/opt/sublime_text`；系统级
+  `/etc/xdg/mimeapps.list` 把 13 个文本类类型（text/plain、json、shellscript、c、python、md、yaml、
+  xml、js、css、html）默认指到 `sublime_text.desktop`，pcmanfm 双击文本文件直接进编辑器；
+  desktop 文件 MimeType 行同步扩到同集合（libfm Open With 需要）。**不给 Sublime 桌面图标**
+  （`/defaults/desktop` 门禁保持恰好 2 件）——它的角色是双击背后的默认打开器。gcompat 兼容层
+  承载 glibc 二进制；许可通道与已知限制见 deploy.md §7.2。
 - **最简音频** = 容器内 PulseAudio（app-share socket）→ ffmpeg MP2 → node relay →
   浏览器 jsmpeg，全链路无额外组件、无麦克风通道。
 - **分辨率不固定**：`-geometry` 只是启动初值（取 `WTK_WIDTH` / `WTK_HEIGHT`，
