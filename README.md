@@ -57,7 +57,7 @@
 
 ```bash
 # 1) 拉镜像
-docker pull ghcr.io/yorkane/kasmweb:latest   # 已发布标签 latest / main / v0.2.0 / 0.2.0 / 0.2 / 2
+docker pull ghcr.io/yorkane/kasmweb:latest   # 已发布标签 latest / main / v0.2.0 / 0.2.0 / 0.2 / 0 / sha-<commit>
 # 2) 起桌面（最小 compose 见 deploy.md §3：三个 bind + loopback 发布 127.0.0.1:25322:3000）
 docker compose -f compose.yaml up -d --pull never
 # 3) 验入口（200 = backend ready，与 dispatcher 判 running 的同一判据）

@@ -196,7 +196,8 @@ docker build -f docker/Dockerfile \
 bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 十七项布局自检
 ```
 
-已发布标签 = `latest` / `main` / `v0.2.0` / `0.2.0` / `0.2` / `2` / `sha-<commit>`；
+已发布标签 = `latest` / `main` / `v0.2.0` / `0.2.0` / `0.2` / `0` / `sha-<commit>`
+（semver 的 major 标签按 0.2.0 实际取 `0`，不是 `2`）；
 `v0.1.0` 及其镜像已于 2026-11-20 清理（本机只保留最新版本）；后续重建会重推同名标签，digest 以 CI 实际产出为准。
 
 构建门禁摘要（`docker/Dockerfile`，任一不过即构建失败）：
@@ -1026,7 +1027,7 @@ playwright-cli eval "() => window.__wdevLayout && window.__wdevLayout.audit()"
 
 ```bash
 cd kasmweb
-docker pull ghcr.io/yorkane/kasmweb:latest            # 已发布 latest / v0.2.0 / 0.2.0 / 0.2 / 2；digest 以 CI 实际产出为准
+docker pull ghcr.io/yorkane/kasmweb:latest            # 已发布 latest / v0.2.0 / 0.2.0 / 0.2 / 0；digest 以 CI 实际产出为准
 WT_KASM_IMAGE='ghcr.io/yorkane/kasmweb:latest' bash scripts/install-manager.sh   # 写进 unit 持久化
 ./scripts/wt-kasm stop chrome-1 && ./scripts/wt-kasm start chrome-1
 ./scripts/wt-kasm verify chrome-1                    # 期望 12/12
