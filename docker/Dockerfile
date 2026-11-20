@@ -462,6 +462,10 @@ RUN set -eu; \
       test -s /opt/wtk-build-residue/wtk-boot.js; \
       grep -qF "window.__WTK_BASE=\"$shape\";" /opt/wtk-build-residue/wtk-boot.js \
         || { echo "gate: wtk-boot.js base mismatch for $shape" >&2; exit 1; }; \
+      grep -qF 'if (localStorage.getItem("enable_ime") === null) { localStorage.setItem("enable_ime", "true"); }' /opt/wtk-build-residue/wtk-boot.js \
+        || { echo "gate: wtk-boot.js missing IME seed for $shape" >&2; exit 1; }; \
+      grep -qF 'if (localStorage.getItem("controlbar_pos") === null) { localStorage.setItem("controlbar_pos", "right"); }' /opt/wtk-build-residue/wtk-boot.js \
+        || { echo "gate: wtk-boot.js missing controlbar-right seed for $shape" >&2; exit 1; }; \
       mkdir -p /opt/wtk-build-residue/nginx; \
       if [ -f /etc/nginx/http.d/default.conf ]; then \
         mv /etc/nginx/http.d/default.conf /opt/wtk-build-residue/nginx/base-default.conf.keep; \

@@ -77,7 +77,28 @@ if left:
 
 # The bootstrap file is written FIRST: if it fails the vhost is untouched and
 # the page degrades to "no audio button" rather than referencing a dead script.
-atomic_write(BOOT, "window.__WTK_BASE=%s;\n" % json.dumps(BASE))
+# 2026-11-20: the bootstrap also carries the KasmVNC page defaults (IME Input
+# Mode on, control bar docked right). It is injected NON-defer in <head>, i.e.
+# it runs before the client bundles read their settings, which are plain
+# localStorage keys (raw names, read via readSetting()/getSetting()).
+BOOT_JS = "window.__WTK_BASE=%s;\n" % json.dumps(BASE)
+BOOT_JS += """
+// --- KasmVNC page defaults (2026-11-20): seed-once client settings ----------
+//   enable_ime     -> "true"  : IME Input Mode (UI.getSetting treats any stored
+//                     value except 0/no/false as checked).
+//   controlbar_pos -> "right" : UI startup runs
+//                     if (readSetting('controlbar_pos') === 'right')
+//                       UI.toggleControlbarSide();
+//                     so the collapsible menu handle starts on the RIGHT edge.
+// Both keys are written only when absent: a user toggle in Settings (or a drag
+// of the handle) rewrites the key and always wins on the next load. Storage
+// errors are swallowed - the page then behaves exactly as the stock client.
+(function () { try {
+  if (localStorage.getItem("enable_ime") === null) { localStorage.setItem("enable_ime", "true"); }
+  if (localStorage.getItem("controlbar_pos") === null) { localStorage.setItem("controlbar_pos", "right"); }
+} catch (e) { /* localStorage unavailable: stock behavior */ } })();
+"""
+atomic_write(BOOT, BOOT_JS)
 atomic_write(DST, text)
 
 sys.stdout.write("render-nginx: wrote %s (port=%s base=%s xvnc=%s relay=%s)\n"

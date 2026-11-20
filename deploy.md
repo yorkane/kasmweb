@@ -746,6 +746,29 @@ docker exec -u abc <ctr> sh -c 'HOME=/config xdg-mime query default text/plain' 
 7. **`Sublime Text` 裸标题瞬态窗**（约 10x10，无文件名）会与编辑主窗同时出现在 `xdotool search` 结果里：
    验收必须钉**带文件名**的 `… - Sublime Text` 窗，裸标题窗不作注册证据（实测记录）。
 
+### 7.3 KasmVNC 页面默认：IME Input Mode 开 + 控制栏右侧（2026-11-20 新增）
+
+页面级默认由**同一个注入件**完成：`render-nginx.py` 生成的
+`/opt/wtk/web/wtk-boot.js`（非 defer，注入在 `<title>KasmVNC</title>` 之后、
+早于客户端 bundle 执行）。它在 `window.__WTK_BASE` 之后追加一段
+**seed-once** 的 localStorage 预置：
+
+| 键（裸名） | 值 | 生效机制 |
+|---|---|---|
+| `enable_ime` | `"true"` | 客户端 `initSetting('enable_ime', false)` → `readSetting()` 直接读该键；`UI.getSetting()` 把非 `0/no/false` 的值判为勾选 ⇒ IME Input Mode 默认开 |
+| `controlbar_pos` | `"right"` | 启动恢复：`if (readSetting('controlbar_pos') === 'right') UI.toggleControlbarSide();` ⇒ 左侧弹出菜单把手默认停靠**右侧** |
+
+- **只在键不存在时写入**（`=== null` 守卫 + try/catch）：用户在 Settings 里关 IME、
+  或把把手拖回左侧，写回的键在下次加载优先，永不被覆盖。
+- 作用域 = 浏览器 origin 的 localStorage：换端口/域名或清空存储后 = 重新播种一次。
+- 构建门禁（`Dockerfile` vhost gate 两种 shape 循环）：`wtk-boot.js` 必须逐字含
+  `window.__WTK_BASE="<shape>";` + 两条 seed 语句，缺一即 FAIL。
+- 运行时复核（浏览器控制台或 playwright evaluate）：
+  `localStorage.getItem('enable_ime')`=`"true"`、
+  `localStorage.getItem('controlbar_pos')`=`"right"`、
+  `document.getElementById('noVNC_setting_enable_ime').checked === true`、
+  `document.getElementById('noVNC_control_bar_anchor').classList.contains('noVNC_right')`。
+
 ## 8. 最简音频
 
 ### 8.1 链路

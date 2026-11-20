@@ -40,6 +40,9 @@
   desktop 文件 MimeType 行同步扩到同集合（libfm Open With 需要）。**不给 Sublime 桌面图标**
   （`/defaults/desktop` 门禁保持恰好 2 件）——它的角色是双击背后的默认打开器。gcompat 兼容层
   承载 glibc 二进制；许可通道与已知限制见 deploy.md §7.2。
+- **页面默认（KasmVNC 客户端）**：打开桌面即 **IME Input Mode 已开启**、控制栏弹出把手默认停靠
+  **屏幕右侧**；由注入的 `wtk-boot.js` 对 `enable_ime` / `controlbar_pos` 做 seed-once 预置
+  （用户在 Settings 里的开关 / 拖动把手的显式选择永远优先；构建门禁逐字断言，deploy.md §7.3）。
 - **最简音频** = 容器内 PulseAudio（app-share socket）→ ffmpeg MP2 → node relay →
   浏览器 jsmpeg，全链路无额外组件、无麦克风通道。
 - **分辨率不固定**：`-geometry` 只是启动初值（取 `WTK_WIDTH` / `WTK_HEIGHT`，
