@@ -2,6 +2,10 @@
 # 基座 a317 已带: nodejs ffmpeg pulseaudio openbox nginx python3 xauth xterm jq
 #                  netcat-openbsd mcookie procps shadow dbus-x11 font-noto(无CJK)
 # 逐包在构建日志与报告里记录实际版本（3.17 已 EOL，走 archive 仓库）
+# 2026-11-20 新增容器内浏览器通道 chromium：112.0.5615.165-r0（community，
+# apk policy 实测；安装后 ~245MB）。运行期依赖（gtk+3.0 / mesa-dri-gallium /
+# nss / xdg-utils / font-opensans 等）由 apk 依赖解析自动带入，不在此另列。
+chromium
 tint2
 pcmanfm
 xdotool

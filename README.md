@@ -10,6 +10,10 @@
 一句话：把一台宿主机上的应用（官方入口 = Chrome）以浏览器里的远程桌面形式开放出来 ——
 单镜像自包含、单端口入口、认证交给上游网关。
 
+浏览器有两条**互相独立、可同时运行**的通道：宿主桥 Chrome（manager 经 `launch.sock` 在宿主侧
+拉起）与容器内 Chromium 112（apk `chromium`，桌面第二个图标直接起容器内进程，不需要 manager、
+不需要宿主 Chrome；细节见 deploy.md §6.5）。
+
 ## 能力
 
 - **单镜像**：基座 `ghcr.io/linuxserver/baseimage-kasmvnc:alpine317` 按 digest 钉死，内含
@@ -20,8 +24,13 @@
   `GET /?desktop=<id>` → 302 root-relative 规范 URL（Location 不拼 origin）。
 - **画面通道**：容器内 nginx `:3000` → Xvnc 内置 httpd `127.0.0.1:6901` 的 `/websockify`；
   Xvnc 监听面收到只剩 loopback（`-interface 127.0.0.1 -rfbport 0 -nolisten tcp`）。
-- **桌面只有一个官方图标 = Chrome**（Chromium 官方 product logo）。图标是宿主应用接入机制的
-  入口示例：接别的应用按同一 `launch.sock` 协议加一个 `.desktop` 即可。
+- **桌面两个官方图标 = Chrome + Chrome（容器内）**（两者都用 Chromium 官方 product logo）。
+  `Chrome.desktop` = 宿主应用接入机制的入口示例：接别的应用按同一 `launch.sock` 协议加一个
+  `.desktop` 即可。`Chrome-Local.desktop` = **容器内浏览器**通道：
+  `Exec=/opt/wtk/bin/wtk-chrome-local` 直接 `exec /usr/bin/chromium-browser --no-sandbox`，不走
+  `launch.sock`、不接任何外部输入，与宿主桥同 `DISPLAY=:1` ⇒ 两窗可并存。门禁把
+  `/defaults/desktop` 断成恰好该二件集合（多一个少一个都 FAIL），`chromium` 二进制按
+  `^Chromium 112.` 逐字断版本，并跑一次真 headless 渲染 smoke（`--dump-dom about:blank`）。
 - **最简任务栏** = tint2 单面板 `panel_size = 100% 30` + `panel_items = TC`
   （任务列表 + 时钟；无 launcher、无托盘，出现 `systray_` / `launcher_` 键即构建 FAIL）。
 - **最简音频** = 容器内 PulseAudio（app-share socket）→ ffmpeg MP2 → node relay →
@@ -59,7 +68,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:25322/
 | §3 | 快速开始：最小 compose、单容器直连、dispatcher 单入口 |
 | §4 | 镜像与标签、CI 发布、本机构建、基座 digest、构建门禁摘要 |
 | §5 | 多桌部署：unit 安装、registry、端口池、全部环境变量清单 |
-| §6 | 宿主应用接入：appshare 契约文件、`launch.sock` 协议、`.desktop` 模板、PID 台账 |
+| §6 | 宿主应用接入：appshare 契约文件、`launch.sock` 协议、`.desktop` 模板、PID 台账；**§6.5 双通道（宿主桥 Chrome / 容器内 Chromium 112）** |
 | §7 | 桌面与任务栏：tint2 要点、`panel_items = TC`、`clock_padding = 44 0` 的用途、**系统默认字体 = Noto CJK SC**（§7.1） |
 | §8 | 音频：链路图、Pulse 凭据、relay env、启用/关闭语义、常见故障判据 |
 | §9 | URL 与分辨率：302 规范参数、`resize` 三档、geometry 三种模式与 409/503 |
@@ -76,17 +85,17 @@ kasmweb/
 ├── README.md              本文件（入口，不重复细节）
 ├── deploy.md              部署与验收手册（唯一细节面）
 ├── docker/                镜像内容层（构建上下文 = 本目录，docker/Dockerfile 为入口）
-│   ├── Dockerfile         两段构建（deps -> release）+ 十项门禁
+│   ├── Dockerfile         两段构建（deps -> release）+ 十一项门禁
 │   ├── apk/               构建期安装包清单
 │   ├── fonts/             99-kasmweb-cjk.conf（系统默认字体 = Noto CJK SC 的 fontconfig 策略）
 │   ├── s6/                服务图：svc-kasmvnc / svc-de / svc-nginx / svc-pulseaudio /
 │   │                      svc-wtk-audio + init-nginx / init-wtk-appshare + s6-apply.sh
 │   ├── windowing/         openbox（rc.xml / autostart / menu）、tint2/tint2rc、
-│   │                      desktop/{Chrome.desktop,icons,libfm.conf}、startwm.sh
+│   │                      desktop/{Chrome.desktop,Chrome-Local.desktop,icons,libfm.conf}、startwm.sh
 │   ├── audio/             relay.js + web/（audio.js、jsmpeg、page.css、layout.css/js）
 │   ├── nginx/             wtk.conf.template + render-nginx.py
 │   ├── pulse/             20-wtk-app-share.pa（app-share socket + null sink）
-│   ├── bin/               wtk-launch、wtk-xauth-seed
+│   ├── bin/               wtk-launch、wtk-chrome-local、wtk-xauth-seed
 │   └── healthcheck.sh     容器 HEALTHCHECK 十二门
 ├── dispatcher/            单入口转发器（Node 标准库）
 │   ├── server.js          入口：路由 + 状态裁决 + WS upgrade

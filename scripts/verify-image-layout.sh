@@ -6,7 +6,15 @@
 # safe on a box that runs production containers.
 #
 # Checks (all must pass; exit non-zero otherwise):
-#   1 /defaults/desktop has exactly 1 entry
+#   1 /defaults/desktop has exactly 2 entries: Chrome.desktop + Chrome-Local.desktop
+#     (asserted as an exact set), each with its verbatim Exec line:
+#     Chrome -> /opt/wtk/bin/wtk-launch chrome (host bridge),
+#     Chrome-Local -> /opt/wtk/bin/wtk-chrome-local (in-container Chromium)
+#   1b /opt/wtk/bin/wtk-chrome-local is present and executable
+#   1c /usr/bin/chromium-browser is present and its ABSOLUTE symlink target
+#      /usr/lib/chromium/chromium-launcher.sh + the chrome binary resolve INSIDE
+#      the unpacked rootfs (Alpine's package provides no /usr/bin/chromium -
+#      apk info -L measured 2026-11-20)
 #   2 /opt/wtk/windowing/tint2/tint2rc: panel_items = TC and clock_padding = 44 0
 #   3 /etc/s6-overlay/s6-rc.d/svc-kasmvnc/run exists and has NO -AcceptSetDesktopSize
 #   4 /opt/wtk/bin/healthcheck.sh contains the pulse native gate
@@ -229,17 +237,63 @@ fail_n=0
 ok() { echo "PASS  $1  -  $2"; pass_n=$((pass_n + 1)); }
 ko() { echo "FAIL  $1  -  $2"; fail_n=$((fail_n + 1)); }
 
-# --- 1: /defaults/desktop has exactly 1 entry -------------------------------
+# --- 1: /defaults/desktop = exactly {Chrome, Chrome-Local} -------------------
 D="$ROOT/defaults/desktop"
 if [ -d "$D" ]; then
   n=$(find "$D" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
-  if [ "$n" = 1 ]; then
-    ok desktop_entries "/defaults/desktop has exactly 1 entry: $(ls "$D" | tr '\n' ' ')"
+  names=$(cd "$D" && ls -1 | LC_ALL=C sort | tr '\n' ' ')
+  if [ "$n" = 2 ] && [ "$names" = "Chrome-Local.desktop Chrome.desktop " ]; then
+    ok desktop_entries "/defaults/desktop has exactly 2 entries: $names"
   else
-    ko desktop_entries "/defaults/desktop has $n entries, expected exactly 1"
+    ko desktop_entries "/defaults/desktop has $n entries [$names], expected exactly {Chrome.desktop, Chrome-Local.desktop}"
+  fi
+  if [ -f "$D/Chrome.desktop" ] && grep -q '^Exec=/opt/wtk/bin/wtk-launch chrome$' "$D/Chrome.desktop"; then
+    ok desktop_chrome_exec "Chrome.desktop Exec = /opt/wtk/bin/wtk-launch chrome (host bridge)"
+  else
+    ko desktop_chrome_exec "Chrome.desktop missing or Exec != /opt/wtk/bin/wtk-launch chrome"
+  fi
+  if [ -f "$D/Chrome-Local.desktop" ] && grep -q '^Exec=/opt/wtk/bin/wtk-chrome-local$' "$D/Chrome-Local.desktop"; then
+    ok desktop_local_exec "Chrome-Local.desktop Exec = /opt/wtk/bin/wtk-chrome-local (in-container)"
+  else
+    ko desktop_local_exec "Chrome-Local.desktop missing or Exec != /opt/wtk/bin/wtk-chrome-local"
   fi
 else
   ko desktop_entries "/defaults/desktop missing"
+  ko desktop_chrome_exec "/defaults/desktop missing"
+  ko desktop_local_exec "/defaults/desktop missing"
+fi
+
+# --- 1b: in-container launcher present + executable --------------------------
+CL="$ROOT/opt/wtk/bin/wtk-chrome-local"
+if [ -f "$CL" ] && [ -x "$CL" ]; then
+  ok chrome_local_launcher "/opt/wtk/bin/wtk-chrome-local present, mode $(stat -c '%a' "$CL")"
+else
+  ko chrome_local_launcher "/opt/wtk/bin/wtk-chrome-local missing or not executable"
+fi
+
+# --- 1c: in-container chromium entry point present ----------------------------
+# Alpine's chromium package provides /usr/bin/chromium-browser as an ABSOLUTE
+# symlink to /usr/lib/chromium/chromium-launcher.sh. A bare [ -x ] on the link
+# follows it into the HOST filesystem (where it does not exist) and would
+# report a false negative, so the link is read here and its target resolved
+# inside the unpacked rootfs. The package provides no /usr/bin/chromium
+# (apk info -L chromium, measured 2026-11-20).
+CB="$ROOT/usr/bin/chromium-browser"
+if [ ! -L "$CB" ] && [ ! -e "$CB" ]; then
+  ko chromium_bin "/usr/bin/chromium-browser missing: the image ships no in-container browser"
+else
+  CB_LINK=$(readlink "$CB" 2>/dev/null || true)
+  case "$CB_LINK" in
+    /*) CB_RES="$ROOT$CB_LINK" ;;
+    *)  CB_RES="$(dirname "$CB")/$CB_LINK" ;;
+  esac
+  if [ ! -s "$CB_RES" ]; then
+    ko chromium_bin "entry link $CB -> ${CB_LINK:-<regular file>}; resolved target $CB_RES missing/empty in rootfs"
+  elif [ ! -s "$ROOT/usr/lib/chromium/chrome" ]; then
+    ko chromium_bin "/usr/lib/chromium/chrome (the browser binary) missing in rootfs"
+  else
+    ok chromium_bin "/usr/bin/chromium-browser -> ${CB_LINK} resolves in rootfs; /usr/lib/chromium/chrome $(wc -c < "$ROOT/usr/lib/chromium/chrome" | tr -d ' ') B"
+  fi
 fi
 
 # --- 2: tint2rc panel_items = TC and clock_padding = 44 0 -------------------

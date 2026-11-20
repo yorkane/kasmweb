@@ -18,6 +18,7 @@
 !audio/web/page.css
 !bin/
 !bin/wtk-launch
+!bin/wtk-chrome-local
 !bin/wtk-xauth-seed
 !healthcheck.sh
 !nginx/

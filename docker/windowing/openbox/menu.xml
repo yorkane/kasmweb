@@ -16,10 +16,20 @@
     this menu carries exactly one app entry - the same single-source rule as
     /defaults/desktop (one Chrome.desktop; the image gate refuses a second).
 -->
+<!-- 2026-11-20 (supersedes the paragraph above): the managed app set is TWO
+     browser channels - the host-bridge Chrome and the in-container Chromium -
+     and this menu mirrors /defaults/desktop exactly (two app entries; the image
+     gate asserts the set is {Chrome.desktop, Chrome-Local.desktop}). The local
+     entry runs /opt/wtk/bin/wtk-chrome-local, which is by design NOT the
+     launch.sock protocol: it serves the in-container browser only, takes no
+     external input, and therefore adds no unaudited host-launch path. -->
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
   <menu id="root-menu" label="桌面">
     <item label="Chrome">
       <action name="Execute"><command>/opt/wtk/bin/wtk-launch chrome</command></action>
+    </item>
+    <item label="Chrome（容器内）">
+      <action name="Execute"><command>/opt/wtk/bin/wtk-chrome-local</command></action>
     </item>
     <separator />
     <item label="终端">

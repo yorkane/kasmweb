@@ -23,8 +23,12 @@
 #     -AcceptSetDesktopSize flag (KasmVNC 1.1.0 native default = accept) and
 #     healthcheck gate 5 validates the reading only (resize=native). The canonical
 #     resize-switch variant is NOT shipped by this image.
-#   * the desktop ships exactly ONE icon: Chrome, with the official Chromium
-#     product logo (see NOTICE).
+#   * the desktop ships exactly TWO icons, both wearing the official Chromium
+#     product logo (see NOTICE): Chrome (host bridge via launch.sock) and
+#     Chrome-Local (the in-container Chromium from the apk `chromium` package).
+#     The two channels are independent processes on the same X display and can
+#     run at the same time; the local channel needs no manager and no host
+#     Chrome (docker/bin/wtk-chrome-local).
 #   * the taskbar is the minimal TC layout (tasklist + clock): no launcher, no
 #     system tray.
 #   * the audio chain is unchanged: pulse app-share -> node relay (MP2) -> jsmpeg
@@ -89,7 +93,7 @@ ARG WTK_NATIVE_HC_SHA256=fb47078e008e2a1c7ef2f39af7ef843db11929c0f2d6302518175c7
 LABEL org.opencontainers.image.title="kasmweb" \
       org.opencontainers.image.version="${WTK_VERSION}" \
       org.opencontainers.image.created="${WTK_BUILD_DATE}" \
-      org.opencontainers.image.description="Single-entry KasmVNC desktop channel: Xvnc+Openbox+tint2(TC), KasmVNC native resize default, one MP2 audio chain, Chrome-only desktop, app-share credential contract on /run/wt-kasm-app" \
+      org.opencontainers.image.description="Single-entry KasmVNC desktop channel: Xvnc+Openbox+tint2(TC), KasmVNC native resize default, one MP2 audio chain, two browser channels (host-bridge Chrome + in-container Chromium 112), app-share credential contract on /run/wt-kasm-app" \
       org.opencontainers.image.base.name="ghcr.io/linuxserver/baseimage-kasmvnc:alpine317" \
       org.opencontainers.image.base.digest="sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d" \
       com.kasmweb.lineage="release FROM deps (deps FROM the pinned base): two stages, one file"
@@ -101,6 +105,7 @@ COPY audio/README.md /opt/wtk/audio/README.md
 COPY nginx/render-nginx.py /opt/wtk/nginx/render-nginx.py
 COPY nginx/wtk.conf.template /opt/wtk/nginx/wtk.conf.template
 COPY bin/wtk-launch /opt/wtk/bin/wtk-launch
+COPY bin/wtk-chrome-local /opt/wtk/bin/wtk-chrome-local
 COPY bin/wtk-xauth-seed /opt/wtk/bin/wtk-xauth-seed
 COPY healthcheck.sh /opt/wtk/bin/healthcheck.sh
 COPY pulse/20-wtk-app-share.pa /etc/pulse/default.pa.d/20-wtk-app-share.pa
@@ -111,6 +116,7 @@ COPY windowing/openbox/autostart /defaults/autostart
 COPY windowing/startwm.sh /defaults/startwm.sh
 COPY windowing/tint2/tint2rc /opt/wtk/windowing/tint2/tint2rc
 COPY windowing/desktop/Chrome.desktop /defaults/desktop/
+COPY windowing/desktop/Chrome-Local.desktop /defaults/desktop/
 COPY windowing/desktop/ /opt/wtk/windowing/desktop/
 COPY s6/svc-kasmvnc/ /etc/s6-overlay/s6-rc.d/svc-kasmvnc/
 COPY s6/svc-nginx/ /etc/s6-overlay/s6-rc.d/svc-nginx/
@@ -124,9 +130,10 @@ COPY s6/svc-de/run /etc/s6-overlay/s6-rc.d/svc-de/run
 # Modes per manifest (COPY keeps context bits; we enforce, never trust):
 RUN set -eu; \
     chmod 0755 /opt/wtk/bin/wtk-launch /opt/wtk/bin/wtk-xauth-seed \
+               /opt/wtk/bin/wtk-chrome-local \
                /opt/wtk/bin/healthcheck.sh /opt/wtk/bin/s6-apply.sh \
                /opt/wtk/nginx/render-nginx.py /defaults/autostart /defaults/startwm.sh \
-               /defaults/desktop/Chrome.desktop; \
+               /defaults/desktop/Chrome.desktop /defaults/desktop/Chrome-Local.desktop; \
     chmod 0644 /opt/wtk/audio/relay.js /opt/wtk/audio/README.md /opt/wtk/audio/web/* \
                /opt/wtk/nginx/wtk.conf.template /etc/xdg/openbox/rc.xml \
                /defaults/menu.xml /opt/wtk/windowing/tint2/tint2rc \
@@ -174,29 +181,46 @@ RUN set -eu; \
     bash -n "$SVC"; bash -n "$HC"; \
     echo 'gate native: OK (svc+hc sha locked, -AcceptSetDesktopSize absent, gate5 validity-only, bash -n clean)'
 
-# --- desktop icon manifest gate: exactly ONE managed icon, Chrome ------------
+# --- desktop icon manifest gate: exactly TWO managed icons (Chrome + Local) --
+# 2026-11-20: the managed set grew from 1 to 2. Chrome stays the HOST BRIDGE
+# (Exec must keep the wtk-launch chrome prefix); Chrome-Local is the
+# IN-CONTAINER channel and its Exec must be exactly the local launcher, never a
+# host-bridge path. The set is asserted exactly: count = 2 AND the sorted names,
+# so a missing entry fails and a third stray file fails too.
 RUN set -eu; \
-    d="/defaults/desktop/Chrome.desktop"; \
-    test -s "$d" || { echo "gate desktop: MISSING Chrome.desktop" >&2; exit 1; }; \
-    grep -q "^Exec=/opt/wtk/bin/wtk-launch chrome" "$d" || { echo "gate desktop: Chrome Exec != wtk-launch chrome" >&2; exit 1; }; \
-    m=$(stat -c "%a" "$d"); test "$m" = 755 || { echo "gate desktop: Chrome mode=$m not 0755" >&2; exit 1; }; \
-    ic=$(sed -n 's/^Icon=//p' "$d" | head -n1); \
-    test -n "$ic" || { echo "gate desktop: Chrome has no Icon=" >&2; exit 1; }; \
-    test -f "$ic" || { echo "gate desktop: Chrome Icon=$ic missing" >&2; exit 1; }; \
-    head -c 8 "$ic" | od -An -tx1 | grep -q '89 50 4e 47' || { echo "gate desktop: Chrome Icon=$ic not PNG" >&2; exit 1; }; \
+    gate_icon() { \
+      f="$1"; want_exec="$2"; \
+      test -s "$f" || { echo "gate desktop: MISSING $f" >&2; exit 1; }; \
+      grep -q "^Exec=$want_exec" "$f" || { echo "gate desktop: $f Exec != $want_exec" >&2; exit 1; }; \
+      m=$(stat -c "%a" "$f"); test "$m" = 755 || { echo "gate desktop: $f mode=$m not 0755" >&2; exit 1; }; \
+      ic=$(sed -n 's/^Icon=//p' "$f" | head -n1); \
+      test -n "$ic" || { echo "gate desktop: $f has no Icon=" >&2; exit 1; }; \
+      test -f "$ic" || { echo "gate desktop: $f Icon=$ic missing" >&2; exit 1; }; \
+      head -c 8 "$ic" | od -An -tx1 | grep -q '89 50 4e 47' || { echo "gate desktop: $f Icon=$ic not PNG" >&2; exit 1; }; \
+      echo "gate desktop: $(basename "$f") Exec=$want_exec mode=755 Icon=$ic (PNG magic ok)"; \
+    }; \
+    gate_icon /defaults/desktop/Chrome.desktop "/opt/wtk/bin/wtk-launch chrome"; \
+    gate_icon /defaults/desktop/Chrome-Local.desktop "/opt/wtk/bin/wtk-chrome-local"; \
     test -s /etc/s6-overlay/s6-rc.d/init-wtk-appshare/up || { echo "gate s6: init-wtk-appshare/up empty -> oneshot no-op" >&2; exit 1; }; \
     test "$(head -c 2 /etc/s6-overlay/s6-rc.d/svc-wtk-audio/run)" = "#!" || { echo "gate s6: svc-wtk-audio/run shebang not at byte 0 (ENOEXEC)" >&2; exit 1; }; \
+    test -x /opt/wtk/bin/wtk-chrome-local || { echo "gate desktop: /opt/wtk/bin/wtk-chrome-local missing or not executable" >&2; exit 1; }; \
     n=$(find /defaults/desktop -mindepth 1 -maxdepth 1 | wc -l); \
-    test "$n" = 1 || { echo "gate desktop: FATAL /defaults/desktop has $n entries, not exactly 1" >&2; exit 1; }; \
-    echo "gate desktop: Chrome present + Exec wtk-launch chrome + 0755 + Icon PNG exists + /defaults/desktop entries=1; up non-empty; shebang byte0 - OK"
+    names=$(cd /defaults/desktop && ls -1 | LC_ALL=C sort | tr '\n' ' '); \
+    test "$n" = 2 || { echo "gate desktop: FATAL /defaults/desktop has $n entries [$names], not exactly 2" >&2; exit 1; }; \
+    test "$names" = "Chrome-Local.desktop Chrome.desktop " || { echo "gate desktop: FATAL /defaults/desktop set = [$names], want exactly [Chrome-Local.desktop Chrome.desktop ]" >&2; exit 1; }; \
+    echo "gate desktop: exact set {Chrome.desktop, Chrome-Local.desktop} (n=2) + both Exec lines verbatim + 0755 + Icon PNG exists + local launcher executable; up non-empty; shebang byte0 - OK"
 
 # --- libfm quick_exec merge + desktop autostart contract ----------------------
 # The pcmanfm apk ships /etc/xdg/libfm/libfm.conf; we merge ONLY the injected key
 # into the base [config] (no whole-file overwrite) and archive the base version by
 # mv (zero rm). quick_exec=1 removes the "this file is an executable script,
 # execute it?" dialog on double-click. The autostart gate proves the managed
-# single-file 0755 force-seed (Chrome only) landed, with no cp -n and no VCMI
-# seeding residue.
+# 2-file 0755 force-seed (Chrome + Chrome-Local) landed, with no cp -n and no
+# VCMI seeding residue. The force copy of BOTH names on every start is the
+# mechanism by which an OLD /config volume (already carrying a Desktop dir with
+# only Chrome.desktop) picks up the new icon after an image swap: the seed is
+# unconditional, so Chrome-Local.desktop lands on the first boot of the new
+# image; no deployment-side manual step is needed for that.
 RUN set -eu; \
     SRC=/opt/wtk/windowing/desktop/libfm.conf; \
     DST=/etc/xdg/libfm/libfm.conf; \
@@ -223,10 +247,12 @@ RUN set -eu; \
     test "$(grep -c '^\[' "$DST")" = "$(grep -c '^\[' "$RES/libfm.conf.base")" || { echo "gate libfm: section header count changed" >&2; exit 1; }; \
     echo "gate libfm: quick_exec=1 merged into base [config]; base keys + sections intact; base archived at $RES/libfm.conf.base"; \
     AUT=/defaults/autostart; \
-    grep -q 'chmod 0755 "$HOME/Desktop/Chrome.desktop"' "$AUT" || { echo "gate autostart: FATAL managed 1-file force-copy + chmod 0755 not landed" >&2; exit 1; }; \
+    grep -q 'for f in Chrome Chrome-Local; do' "$AUT" || { echo "gate autostart: FATAL managed seed list is not [Chrome Chrome-Local]" >&2; exit 1; }; \
+    grep -q 'chmod 0755 "$HOME/Desktop/Chrome.desktop" "$HOME/Desktop/Chrome-Local.desktop"' "$AUT" || { echo "gate autostart: FATAL managed 2-file force-copy + chmod 0755 not landed" >&2; exit 1; }; \
     if grep -q 'cp -n /defaults/desktop/' "$AUT"; then echo "gate autostart: FATAL cp -n seed present (stale icons would never upgrade)" >&2; exit 1; fi; \
-    if grep -q 'VCMI' "$AUT"; then echo "gate autostart: FATAL VCMI seed residue present (Chrome-only product)" >&2; exit 1; fi; \
-    echo "gate autostart: managed Chrome-only 0755 force-seed present, no cp -n, no VCMI"
+    if grep -q 'VCMI' "$AUT"; then echo "gate autostart: FATAL VCMI seed residue present (managed set = Chrome + Chrome-Local)" >&2; exit 1; fi; \
+    grep -q 'command>/opt/wtk/bin/wtk-chrome-local' /defaults/menu.xml || { echo "gate autostart: /defaults/menu.xml has no in-container Chromium entry" >&2; exit 1; }; \
+    echo "gate autostart: managed 2-icon (Chrome + Chrome-Local) 0755 force-seed present, no cp -n, no VCMI; root menu carries both browser entries"
 
 # --- taskbar gate: minimal TC layout + openbox alignment anchors -------------
 RUN set -eu; \
@@ -392,6 +418,55 @@ RUN set -eu; \
       *DejaVu*) echo "gate cjk: FAIL - zh-cn resolves to a DejaVu family" >&2; exit 1 ;; \
     esac; \
     echo "gate cjk: all hard assertions PASS (zh-cn / default sans / serif / mono = * CJK SC; DejaVu negative ok)"
+
+# --- in-container browser gate (Chrome-Local channel) -------------------------
+# The second browser channel is the apk `chromium` (Alpine 3.17 community,
+# 112.0.5615.165-r0 pinned by the archive index). Hard assertions, any miss =
+# build FAIL: entry point on PATH, --version matches ^Chromium 112., and a REAL
+# headless smoke render (a version string alone would not catch a broken
+# sandbox / missing libs / font-config hole).
+# Entry point name (measured 2026-11-20 via apk info -L chromium): Alpine ships
+# NO /usr/bin/chromium. The provided entry is /usr/bin/chromium-browser ->
+# /usr/lib/chromium/chromium-launcher.sh, which adds no flags of its own, so
+# this gate and docker/bin/wtk-chrome-local both invoke chromium-browser.
+# The smoke uses --headless=new (Chromium 112 supports it), --no-sandbox (same
+# trade-off as the runtime launcher: this container grants no unprivileged user
+# namespaces, so the setuid chrome-sandbox helper cannot complete its namespace
+# pivot - measured as abc: rc 133 "Failed to move to new namespace ... Operation
+# not permitted"; with --no-sandbox the same invocation renders),
+# --disable-dev-shm-usage (the build container /dev/shm is 64MB) and
+# --disable-gpu (no GPU in the build environment), plus a private throwaway
+# --user-data-dir under the residue dir so the gate never writes to the build
+# HOME. Measured 2026-11-20: smoke rc=0, stdout = the about:blank DOM
+# "<html><head></head><body></body></html>" (40 B on disk; the PASS echo
+# reports 39 B because command substitution strips the trailing newline).
+# Negative controls (measured 2026-11-20 on context copies under
+# /data/tmp/kasmweb-chrome/negA-* / negB-*, repo tree untouched, builds ran
+# offline against the same base tag, both rc=1):
+#   negA: a third .desktop COPYed into /defaults/desktop -> the DESKTOP gate
+#         fails verbatim: "gate desktop: FATAL /defaults/desktop has 3 entries
+#         [Chrome-Local.desktop Chrome.desktop Stray.desktop ], not exactly 2".
+#         (Deleting the shipped file outright cannot reach this gate: the
+#         COPY line hard-fails the context checksum first - also exit 1.)
+#   negB: packages.txt without `chromium` -> THIS gate fails verbatim:
+#         "gate chromium: FAIL - chromium-browser not on PATH (apk package
+#         missing?)" (the apk audit trail then lists no chromium).
+RUN set -eu; \
+    command -v chromium-browser >/dev/null || { echo "gate chromium: FAIL - chromium-browser not on PATH (apk package missing?)" >&2; exit 1; }; \
+    ver=$(chromium-browser --version 2>&1 | head -n1); \
+    echo "gate chromium: chromium-browser --version -> [$ver]"; \
+    printf '%s' "$ver" | grep -qE '^Chromium 112\.' || { echo "gate chromium: FAIL - version [$ver] does not match ^Chromium 112." >&2; exit 1; }; \
+    UDD=/opt/wtk-build-residue/chromium-smoke-profile; \
+    install -d -m 700 "$UDD"; \
+    SMOKE_ERR=/opt/wtk-build-residue/chromium-smoke.err; \
+    html=$(HOME="$UDD" timeout 120 chromium-browser --headless=new --no-sandbox --disable-gpu \
+      --disable-dev-shm-usage --disable-software-rasterizer --no-first-run \
+      --no-default-browser-check --user-data-dir="$UDD" --dump-dom about:blank 2>"$SMOKE_ERR") || { \
+        echo "gate chromium: FAIL - headless smoke exited non-zero; stderr tail:" >&2; \
+        tail -n 25 "$SMOKE_ERR" >&2 || true; exit 1; }; \
+    test -n "$html" || { echo "gate chromium: FAIL - headless smoke produced no DOM" >&2; exit 1; }; \
+    printf '%s' "$html" | grep -qi '<html' || { echo "gate chromium: FAIL - smoke output has no <html: [$html]" >&2; exit 1; }; \
+    echo "gate chromium: $(du -sh /usr/lib/chromium 2>/dev/null | awk '{print $1}') install, version pinned, headless smoke DOM ok ($(printf '%s' "$html" | wc -c) B) - PASS"
 
 # --- container contract -------------------------------------------------------
 # Contract env defaults = probe contract; compose repeats geometry per desktop.

@@ -1,0 +1,55 @@
+#!/bin/sh
+# wtk-chrome-local - launch the IN-CONTAINER Chromium (apk `chromium`).
+#
+# This is the second, independent browser channel of the image. The first one
+# is the host bridge: /opt/wtk/bin/wtk-launch chrome talks to the manager over
+# launch.sock and the manager raises the host Chrome on this desktop's X
+# display. This launcher never touches that socket: it execs the in-container
+# Chromium directly, so the entry works with the manager down, with no appshare
+# volume mounted, and with no host Chrome installed. Both channels point at
+# the SAME
+# X display (DISPLAY=:1, the container's own Xvnc), so they can run
+# concurrently - separate processes, separate profiles, separate windows.
+#
+# Scope: this entry serves the in-container browser ONLY. It takes no external
+# input of any kind - no control socket, no argv/url/env channel, no
+# management API. Anything after $@ is plain Chromium flags typed by whoever
+# uses the desktop; there is no protocol here to attack, and nothing outside
+# the container can drive it.
+#
+# --no-sandbox: the desktop session runs as abc (uid 1000, svc-de drops via
+# s6-setuidgid). Measured 2026-11-20 in this exact image (probe stage on the
+# built deps layer): as abc WITHOUT --no-sandbox Chromium dies with
+# "Failed to move to new namespace: ... errno = Operation not permitted"
+# (rc 133, core dump) - the container gives no unprivileged user namespaces, and
+# Alpine's setuid chrome-sandbox helper is refused by the kernel here (setuid
+# binaries in a container with the default seccomp/apparmor profile cannot do
+# the namespace pivot this Chromium needs). WITH --no-sandbox the same command
+# renders (rc 0, DOM returned). So the flag is not cosmetic: without it this
+# entry cannot start at all in the shipped runtime shape. Accepted trade-off:
+# renderer isolation is weaker than the host bridge's Chrome (which runs the
+# real sandbox on the host), so the in-container channel is the convenience
+# path, not the hardened one.
+#
+# Audio: the container runs its own PulseAudio (svc-pulseaudio) and publishes
+# /run/pulse/native plus the app-facing /run/wt-kasm-app/native
+# (docker/pulse/20-wtk-app-share.pa). Chromium connects through the native
+# protocol and its output lands on the auto_null sink, which the existing
+# ffmpeg -> relay -> jsmpeg chain already mirrors to the browser. The session
+# environment normally already carries PULSE_SERVER (init-wtk-appshare writes
+# it to /run/s6/container_environment/PULSE_SERVER pointing at
+# unix:/run/wt-kasm-app/native, and svc-de runs the session through
+# with-contenv), so the export below is a fallback for a bare shell, not the
+# primary path: it fires only when the variable is unset/empty, and prefers
+# /run/pulse/native (the container-internal socket, no appshare mount needed).
+set -u
+
+if [ -z "${PULSE_SERVER:-}" ] && [ -S /run/pulse/native ]; then
+  export PULSE_SERVER=unix:/run/pulse/native
+fi
+
+# Alpine `chromium` ships no /usr/bin/chromium: the provided entry point is
+# /usr/bin/chromium-browser -> /usr/lib/chromium/chromium-launcher.sh (measured
+# 2026-11-20 via apk info -L chromium; 112.0.5615.165-r0). The launcher adds no
+# flags of its own, so this exec line stays the full flag set.
+exec /usr/bin/chromium-browser --no-sandbox --no-first-run --no-default-browser-check "$@"

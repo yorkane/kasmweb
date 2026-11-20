@@ -12,16 +12,24 @@
 
 | 关系 | 事实 |
 |---|---|
-| 与 KasmVNC | 容器内的 Xvnc **就是** KasmVNC 1.1.0，来自基座镜像 `ghcr.io/linuxserver/baseimage-kasmvnc:alpine317`（按 digest 钉死，`docker/Dockerfile:36,90`；KasmVNC 版本与行为事实的取证 = 基座 digest + 外部调研件，**不随仓发布**）。本仓库不 fork、不改 KasmVNC 源码。 |
+| 与 KasmVNC | 容器内的 Xvnc **就是** KasmVNC 1.1.0，来自基座镜像 `ghcr.io/linuxserver/baseimage-kasmvnc:alpine317`（按 digest 钉死，`docker/Dockerfile:40,98`；KasmVNC 版本与行为事实的取证 = 基座 digest + 外部调研件，**不随仓发布**）。本仓库不 fork、不改 KasmVNC 源码。 |
 | 与 Kasm Workspaces | **不是** Kasm Workspaces。没有 Kasm 平台的 API / 用户库 / 镜像库 / 连接簿。`?desktop=` 之外的规范 URL 参数由 KasmVNC **内置 web 客户端**（noVNC 血统的 `ui.js`）消费。 |
 | 与 Selkies | 无代码关系，同一问题的不同实现。 |
 | 与 wdev | **本仓库是独立通道，不含 wdev 集成**。认证 / 授权由部署者自己的网关（authz、APISIX、nginx…）承担；本服务只监听 loopback、自身不判安全矩阵。 |
 | 不是什么 | 不是多租户平台；不含认证；不管容器编排之外的东西；manager **不 build 也不 pull 镜像**；不做开机自愈（§13）。 |
 
-桌面**只有一个官方图标 = Chrome**（Chromium 官方 product logo，
-`docker/windowing/desktop/Chrome.desktop`，构建门禁要求 `/defaults/desktop` **恰好 1 个条目**，
-`docker/Dockerfile:178-191`）。图标只是宿主应用接入机制的入口示例：接别的应用按同一
-`launch.sock` 协议加一个 `.desktop` 即可（§6）。
+桌面**有两个官方图标 = Chrome + Chrome（容器内）**（两者都用 Chromium 官方 product logo，
+`docker/windowing/desktop/Chrome.desktop` 与 `Chrome-Local.desktop`）。构建门禁要求
+`/defaults/desktop` **恰好等于该二件集合**（多一个少一个都 FAIL，`docker/Dockerfile:184-211`）。
+两条浏览器通道**互不依赖、可同时运行**：
+
+| 图标 | 通道 | Exec | 依赖 |
+|---|---|---|---|
+| `Chrome.desktop` | 宿主桥 | `/opt/wtk/bin/wtk-launch chrome` | manager 活着 + appshare 卷已挂 + 宿主 Chrome 就位（§6.1-§6.4） |
+| `Chrome-Local.desktop` | 容器内 Chromium 112 | `/opt/wtk/bin/wtk-chrome-local` | 只依赖镜像内 apk `chromium`；manager 缺席、无宿主 Chrome 也能起（§6.5） |
+
+宿主桥图标仍是宿主应用接入机制的入口示例：接别的应用按同一 `launch.sock` 协议加一个
+`.desktop` 即可（§6）。
 
 ## 2. 架构与数据流
 
@@ -68,7 +76,7 @@
 ## 3. 快速开始（最小路径）
 
 单桌面直接跑容器；要多桌统一入口与规范参数注入再叠 dispatcher（§5）。
-镜像内只有 `EXPOSE 3000`（`docker/Dockerfile:415`），6901 / 4901 只绑容器 loopback。
+镜像内只有 `EXPOSE 3000`（`docker/Dockerfile:490`），6901 / 4901 只绑容器 loopback。
 
 ```bash
 # 0) 仓库里已有两份可直接改用的示例：
@@ -135,7 +143,7 @@ docker inspect -f '{{.State.Health.Status}}' wt-kasm-chrome-1
 文法 = `/` 后接零个或多个 `[A-Za-z0-9._-]` 段、每段以 `/` 结尾 ⇒ `/`（单容器根部署）
 与 `/desktop/<id>/`（dispatcher 多桌挂载）**两种形态都支持**；非法形态与含 `..` 的穿越段
 显式拒绝（exit 2，fail-closed）。构建门禁对两种形态各渲染一次 vhost 并分别 `nginx -t`，
-全过才放行（`Dockerfile:288-316`）——旧文法拒 `/` 导致根部署起不来的缺陷已修复并进门禁。
+全过才放行（`Dockerfile:314-342`）——旧文法拒 `/` 导致根部署起不来的缺陷已修复并进门禁。
 
 （本节 `D=/data/app/kasmweb/...` = 手跑示例目录；生产与 manager 现势根 = `/data/app/webtop-kasmvnc`，见 §5.1。）
 
@@ -157,8 +165,9 @@ curl -s http://127.0.0.1:25320/healthz                       # 期望 ok desktop
 curl -s -o /dev/null -D - 'http://127.0.0.1:25320/?desktop=chrome-1' | sed -n '1,6p'
 ```
 
-桌面图标（§6）与音频（§8）都**不是**起容器就自动可用：前者需要 manager 与宿主 Chrome 就位，
-后者需要在浏览器里点音频按钮（用户手势门）。
+桌面图标（§6）有两条通道：`Chrome`（宿主桥）**不是**起容器就可用——需要 manager 与宿主 Chrome
+就位；`Chrome（容器内）` 起容器即可双击使用（不经 manager、不需要宿主 Chrome）。音频（§8）
+需要在浏览器里点音频按钮（用户手势门）。
 
 ## 4. 镜像与标签
 
@@ -167,12 +176,12 @@ curl -s -o /dev/null -D - 'http://127.0.0.1:25320/?desktop=chrome-1' | sed -n '1
 | 镜像 | `ghcr.io/yorkane/kasmweb:<tag>` | 产品契约 |
 | 发布流水线 | `.github/workflows/publish.yml`：tag `v*` → semver 三档 + tag + sha；`main` → `latest` / `main` / `sha`（HEAD 已打 tag 时跳过分支构建）；`workflow_dispatch` → 自定义 tag | `publish.yml:17-28,48-61` |
 | 构建上下文 | `./docker`，Dockerfile = `./docker/Dockerfile`，构建后 `load: true` 供自检 | `publish.yml:90-101` |
-| 构建后自检 | `bash scripts/verify-image-layout.sh <tag>`（离线 `docker save` + tar 解包，**不 run 不 create**） | `publish.yml:106-115`，`scripts/verify-image-layout.sh:1-25` |
-| 两段构建 | `FROM <base> AS deps`（apk 层）+ `FROM deps AS release`（内容层） | `docker/Dockerfile:38,80` |
-| 基座（钉 digest） | `ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d`，LABEL 记 name=`:alpine317` | `docker/Dockerfile:36,89-90` |
-| 版本标签 | `ARG WTK_VERSION=0.1.0`（两段共用） | `docker/Dockerfile:39,81` |
-| 暴露端口 | `EXPOSE 3000`（仅此一个） | `docker/Dockerfile:415` |
-| HEALTHCHECK | `--interval=20s --timeout=30s --start-period=60s --retries=6` → `/opt/wtk/bin/healthcheck.sh` | `docker/Dockerfile:421-422` |
+| 构建后自检 | `bash scripts/verify-image-layout.sh <tag>`（离线 `docker save` + tar 解包，**不 run 不 create**）十三项自检：桌面二件集合 + 两个 `Exec` 逐字 + 容器内启动器可执行 + `/usr/bin/chromium-browser` 存在 + tint2 + svc argv + healthcheck 门 + jsmpeg + 图标 PNG | `publish.yml:106-115`，`scripts/verify-image-layout.sh:1-36` |
+| 两段构建 | `FROM <base> AS deps`（apk 层）+ `FROM deps AS release`（内容层） | `docker/Dockerfile:42,84` |
+| 基座（钉 digest） | `ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d`，LABEL 记 name=`:alpine317` | `docker/Dockerfile:40,97-98` |
+| 版本标签 | `ARG WTK_VERSION=0.1.0`（两段共用） | `docker/Dockerfile:43,85` |
+| 暴露端口 | `EXPOSE 3000`（仅此一个） | `docker/Dockerfile:490` |
+| HEALTHCHECK | `--interval=20s --timeout=30s --start-period=60s --retries=6` → `/opt/wtk/bin/healthcheck.sh` | `docker/Dockerfile:496-497` |
 
 本机构建（CI 会 `--pull` 基座 digest；离线开发机把 `WTK_BASE` 指到本地别名 tag）：
 
@@ -184,7 +193,7 @@ docker build -f docker/Dockerfile --build-arg WTK_VERSION=0.1.0 \
 docker build -f docker/Dockerfile \
   --build-arg WTK_BASE=webtop-kasmvnc-base:alpine317-527bb89e --pull=false \
   -t kasmweb:local docker
-bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 六项布局自检
+bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 十三项布局自检
 ```
 
 已发布标签 = `latest` / `v0.1.0` / `0.1.0`；后续重建会重推同名标签，digest 以 CI 实际产出为准。
@@ -193,36 +202,49 @@ bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 六项布
 
 1. **仓库源钉文件**：Alpine v3.17 已 EOL，`/etc/apk/repositories` 写死
    `dl-cdn.alpinelinux.org` 的 v3.17 main + community，两个 `APKINDEX.tar.gz` 先 `--spider`
-   探测，不可达即 `exit 3`，**不回落镜像站**（`Dockerfile:51-59`）。
+   探测，不可达即 `exit 3`，**不回落镜像站**（`Dockerfile:55-63`）。
 2. **native 几何门禁**：`svc-kasmvnc/run` 与 `healthcheck.sh` 按 sha256 自锁
-   （`WTK_NATIVE_SVC_SHA256` / `WTK_NATIVE_HC_SHA256`，`Dockerfile:87-88`），
-   且 argv 里 `-AcceptSetDesktopSize` 出现次数**必须为 0**（`Dockerfile:158-159`）。
-3. **桌面图标门禁**：`/defaults/desktop` 恰好 1 个条目；`Chrome.desktop` 的
-   `Exec` 必须逐字以 `/opt/wtk/bin/wtk-launch chrome` 开头、mode 755、
-   `Icon=` 指向的文件存在且是 PNG（`Dockerfile:178-191`）。
-4. **autostart 门禁**：必须含 Chrome-only 的 `chmod 0755 "$HOME/Desktop/Chrome.desktop"`
-   强制播种；出现 `cp -n` 播种或 `VCMI` 残留 = FAIL（`Dockerfile:226-229`）。
+   （`WTK_NATIVE_SVC_SHA256` / `WTK_NATIVE_HC_SHA256`，`Dockerfile:91-92`），
+   且 argv 里 `-AcceptSetDesktopSize` 出现次数**必须为 0**（`Dockerfile:165-166`）。
+3. **桌面图标门禁**：`/defaults/desktop` 的条目**恰好等于集合** {`Chrome.desktop`,
+   `Chrome-Local.desktop`}（数量 = 2 且逐名比对，多一个少一个都 FAIL）；两个条目的 `Exec`
+   分别逐字断言（`Chrome` → `/opt/wtk/bin/wtk-launch chrome` 前缀；`Chrome-Local` →
+   `/opt/wtk/bin/wtk-chrome-local`），mode 逐字 = 755，`Icon=` 指向的文件存在且是 PNG，
+   `/opt/wtk/bin/wtk-chrome-local` 必须存在且可执行（`Dockerfile:184-211`）。
+4. **autostart / 菜单门禁**：播种清单逐字 = `for f in Chrome Chrome-Local; do`，且强制
+   `chmod 0755 "$HOME/Desktop/Chrome.desktop" "$HOME/Desktop/Chrome-Local.desktop"`；
+   `/defaults/menu.xml` 必须含 `<command>/opt/wtk/bin/wtk-chrome-local</command>`
+   （两条浏览器通道在右键菜单与桌面同源）；出现 `cp -n` 播种或 `VCMI` 残留 = FAIL
+   （`Dockerfile:249-255`）。
 5. **任务栏门禁**：`panel_items` 必须逐字 = `TC`、`clock_padding = 44 0`、
    `panel_size = 100% 30`、`panel_window_name = wtk-taskbar`、
-   `rc.xml` 保留 `wtk-taskbar` 匹配；出现 `systray_` / `launcher_` 键 = FAIL（`Dockerfile:232-241`）。
+   `rc.xml` 保留 `wtk-taskbar` 匹配；出现 `systray_` / `launcher_` 键 = FAIL（`Dockerfile:258-267`）。
 6. **libfm quick_exec 合并**：只把注入键合进基座 `[config]`，基座键与 section 数逐字保留，
-   原件 `mv` 归档（零 rm）（`Dockerfile:200-224`）。
+   原件 `mv` 归档（零 rm）（`Dockerfile:224-248`）。
 7. **vhost 门禁**：对 `/desktop/demo/` 与 `/` 两种 base 形态**各渲染一次** vhost 并分别
-   `nginx -t`，被拒即 FAIL（`Dockerfile:288-316`）。
+   `nginx -t`，被拒即 FAIL（`Dockerfile:314-342`）。
 8. **s6 图门禁**：`s6-apply.sh` 归档式摘除 `svc-kclient` / `svc-docker` /
    `init-mods-package-install` 并改写边，随后逐边断言 + 悬空边审计 + `s6-rc-compile` RC=0 +
    编译图服务数 ≥ 20 + 保留 `/kclient/node_modules/ws`（音频 relay 的 ws 回退依赖）
-   （`Dockerfile:324-353`）。
+   （`Dockerfile:350-379`）。
 9. **CJK 字体门禁**：`/etc/fonts/conf.d/99-kasmweb-cjk.conf` 必须存在且权限 `644`；
    `fc-list` 必须暴露 `Noto Sans CJK SC`；四条 `fc-match -f '%{family[0]}'` 断言**逐字**命中
    `sans-serif:lang=zh-cn` → `Noto Sans CJK SC`、`sans-serif` → `Noto Sans CJK SC`、
    `serif` → `Noto Serif CJK SC`、`monospace` → `Noto Sans Mono CJK SC`，另加 DejaVu
    负例（zh-cn 落 DejaVu 族即 FAIL）。任一失配 = 构建失败，JP/KR/TC/DejaVu 兜底
-   在构建期就出局，不留到桌面（`Dockerfile:355-394`）。策略文件本体见 §7.1。
-10. **零 rm 纪律**：门禁止物进 `/opt/wtk-build-residue` 保留，`/var/cache/apk` 不清理。
+   在构建期就出局，不留到桌面（`Dockerfile:390-420`）。策略文件本体见 §7.1。
+10. **容器内浏览器门禁（Chrome-Local 通道）**：`command -v chromium-browser` 必须命中；
+    `chromium-browser --version` 首行逐字匹配 `^Chromium 112\.`（钉 Alpine 3.17 community 的
+    112.0.5615.165-r0）；并跑一次**真 headless smoke**：`chromium-browser --headless=new
+    --no-sandbox --disable-gpu --disable-dev-shm-usage --user-data-dir=<residue>/...
+    --dump-dom about:blank` 退出 0 且输出含 `<html`。版本串只证明装上了，smoke 才证明
+    它能渲染（缺库 / sandbox / 字体配置洞都会在这里出局）。构建环境无 X 无 GPU、
+    `/dev/shm` 仅 64MB ⇒ headless=new + `--disable-gpu` + `--disable-dev-shm-usage`。
+    **硬门禁，未降级**（`Dockerfile:454-469`）。
+11. **零 rm 纪律**：门禁止物进 `/opt/wtk-build-residue` 保留，`/var/cache/apk` 不清理。
 
 镜像内容层的完整 COPY 落位表由镜像侧文档维护（`docker/` 树 = 镜像内容层（CI 构建上下文即
-本目录），落位见 `Dockerfile:98-122`）。
+本目录），落位见 `Dockerfile:102-128`）。
 
 ## 5. 多桌部署（manager + dispatcher）
 
@@ -456,9 +478,11 @@ WTK_APPSHARE=/run/wt-kasm-app /opt/wtk/bin/wtk-launch chrome
 
 ### 6.3 桌面图标与 .desktop 模板
 
-镜像内置图标在 `/defaults/desktop/Chrome.desktop`，`/defaults/autostart` 每次启动**强制复制**
-到 `$HOME/Desktop` 并 `chmod 0755`（构建门禁明查，`docker/Dockerfile:226-229`；
-禁止 `cp -n`，禁止 VCMI 播种残留）。逐字模板：
+镜像内置**两个**图标 `/defaults/desktop/Chrome.desktop` 与 `Chrome-Local.desktop`，
+`/defaults/autostart` 每次启动对这两个名字**强制复制**（`cp -f`）到 `$HOME/Desktop` 并
+`chmod 0755`（构建门禁明查播种清单与 chmod 行，`docker/Dockerfile:249-255`；禁止 `cp -n`，
+禁止 VCMI 播种残留。播种无条件 ⇒ **旧 /config 卷换新镜像后，新图标在第一次启动即自动
+出现在桌面**，部署侧无需手工步骤，见 §6.5）。宿主桥逐字模板：
 
 ```ini
 [Desktop Entry]
@@ -471,13 +495,26 @@ Terminal=false
 StartupNotify=false
 ```
 
+容器内通道逐字模板（`Chrome-Local.desktop`，图标复用同款官方 logo PNG）：
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Chrome（容器内）
+Comment=Launch the in-container Chromium
+Exec=/opt/wtk/bin/wtk-chrome-local
+Icon=/opt/wtk/windowing/desktop/icons/chrome.png
+Terminal=false
+StartupNotify=false
+```
+
 **接别的宿主应用 = 按同一协议加一个 `.desktop`**：`Exec` 必须是
 `/opt/wtk/bin/wtk-launch <appId>`（构建门禁按该前缀逐字断言），
 `Icon` 指向镜像内 PNG，mode 0755；同时在 manager 侧把该 `appId` 注册进该桌白名单
 `APP_IDS_BY_DESKTOP`（`config.py:710`，opt-in 桌面清单 `WT_KASM_CATALOG_FILE` 可带自己的
 appIds，`config.py:938-946`）并给 `wtk-launch` 的本地词表加名。
 `libfm quick_exec=1` 在构建期合入基座配置，消掉双击时的「可执行脚本，要执行吗」对话框
-（`docker/Dockerfile:200-224`）。
+（`docker/Dockerfile:224-248`）。
 
 ### 6.4 宿主进程环境、PID 台账与零 pkill
 
@@ -509,13 +546,37 @@ argv 消费处，`hostapps.py:583-600`）。
 Chrome profile 的 `SingletonLock` 只回收**已确认死亡**的锁（移入 trash）；锁主未确认死亡
 ⇒ 拒绝同 profile 再开，不自动删锁（`hostapps.py:963-1018`）。**全程零 pkill、零模式匹配 kill。**
 
+### 6.5 双通道：宿主桥 Chrome 与容器内 Chromium 112（2026-11-20 新增）
+
+镜像内的浏览器入口从 1 个变 2 个，两条通道**互不依赖、可同时启动**（同 `DISPLAY=:1`，两个独立进程、两份独立 profile、两个独立窗口，任务栏各一条目）：
+
+| | 宿主桥 Chrome | 容器内 Chromium 112 |
+|---|---|---|
+| 桌面图标 | `Chrome.desktop`（Name=Chrome） | `Chrome-Local.desktop`（Name=Chrome（容器内）） |
+| 启动链 | 图标 → `wtk-launch chrome` → `launch.sock` → manager → **宿主** Chrome | 图标 → `/opt/wtk/bin/wtk-chrome-local` → `exec /usr/bin/chromium-browser`（容器内） |
+| 二进制 | `WT_KASM_CHROME_BIN`（宿主侧，期望 153.0.8010.12） | apk `chromium` = 112.0.5615.165-r0（Alpine 3.17 community） |
+| profile | 宿主私有 profile（manager 管理 + SingletonLock 纪律） | 容器内默认 profile（`$HOME/.config/chromium`，随 /config 卷持久） |
+| 音频 | 宿主 Chrome → appshare native socket → 容器 pulse → relay | 容器内 pulse：会话环境已带 `PULSE_SERVER=unix:/run/wt-kasm-app/native`（init-wtk-appshare 发布，经 with-contenv 进桌面会话）；裸 shell 里启动器回落 `unix:/run/pulse/native`。两条 socket 都汇入 `auto_null` sink → 现有 MP2 relay → 浏览器音频按钮 |
+| 依赖 | manager 活着 + appshare 卷已挂 + 宿主 Chrome 就位 | 只依赖镜像自身（manager 可缺席） |
+| 沙箱 | 宿主正常 sandbox（**不加** `--no-sandbox`） | `--no-sandbox`（见下） |
+
+**容器内通道的固定 argv**（`docker/bin/wtk-chrome-local`）：`exec /usr/bin/chromium-browser --no-sandbox --no-first-run --no-default-browser-check "$@"`。
+（Alpine `chromium` 包**不提供** `/usr/bin/chromium`，其入口 = `/usr/bin/chromium-browser` →
+`/usr/lib/chromium/chromium-launcher.sh`，launcher 自身不加旗标，故上面这行就是完整旗标集。）`$@` 直通给 Chromium 本体：这个入口只服务容器内浏览器，**不接外部输入** —— 没有控制 socket、没有 argv/url/env 注入通道、没有管理面，`launch.sock` 协议（§6.2）与它无关；能给它传参的只有桌面会话里的人。
+
+**`--no-sandbox` 取舍**：桌面会话进程是 `abc`（uid 1000，svc-de 经 s6-setuidgid 降权），Alpine chromium 在本容器形态下没有可用的 setuid sandbox helper（镜像未带该 helper，容器也未授予 user namespaces），不加旗标 Chromium 直接拒绝启动。接受的代价 = 渲染进程隔离弱于宿主桥（宿主 Chrome 跑真沙箱）⇒ 容器内通道定位是**便利面**，不可声明为加固面；对安全边界敏感的访问走宿主桥。
+
+**旧 /config 卷换新镜像的行为**：新图标**会**自动出现，部署侧无需手工步骤。机制在 `/defaults/autostart`：每次 openbox 启动对管理名单 {`Chrome`, `Chrome-Local`} 逐名 `cp -f`（覆盖式，非 `cp -n`）+ `chmod 0755`，与 `$HOME/Desktop` 既有内容无关 ⇒ 已有 Desktop 目录的老卷在换新镜像后的第一次启动就多出 `Chrome-Local.desktop`（同机制还会把旧的 0644 副本刷新成 0755）。要在**不重启会话**的情况下立刻见效，可手工执行同一动作：`cp -f /defaults/desktop/Chrome-Local.desktop ~/Desktop/ && chmod 0755 ~/Desktop/Chrome-Local.desktop`。
+
+**已知限制（容器内通道）**：112 是 Alpine 3.17 archive 仓库钉死的版本，比宿主 Chrome 153 旧约 41 个大版本（无新平台特性，安全补丁止于 archive 冻结点）；`--no-sandbox` 弱化渲染隔离；profile 落在 /config 卷上随桌持久（共桌即共享 profile，没有 manager 侧的私有 profile 隔离）；KasmVNC 无 GPU 加速，Chromium 走软件光栅（与宿主桥同条件）。构建门禁 = 版本逐字断言 + 真 headless 渲染 smoke（§4 门禁 10）。
+
 ## 7. 桌面与任务栏
 
 会话 = `svc-de/run` → `/defaults/startwm.sh`（等 X 就绪、写 root 归属属性并读回校验）→
 `exec openbox-session`；openbox 的 `/defaults/autostart` 再拉起 tint2 与 pcmanfm
 （`docker/s6/svc-de/run:31-40`、`docker/windowing/startwm.sh:40-97`）。
 桌面底色 = `xsetroot -solid '#1c1712'` 纯色，镜像不带壁纸；pcmanfm 只做桌面层与图标网格，
-openbox 是唯一 WM（`docker/windowing/openbox/autostart:24,45-84`）。
+openbox 是唯一 WM（`docker/windowing/openbox/autostart:24,45-93`）。
 
 tint2（`docker/windowing/tint2/tint2rc`，构建门禁逐字断言）：
 
@@ -530,14 +591,14 @@ tint2（`docker/windowing/tint2/tint2rc`，构建门禁逐字断言）：
 
 `clock_padding = 44 0` 的**右段是浏览器音频按钮的暗色落脚带**：Kasm 前端在每个观看者浏览器里
 把音频开关渲染在画布右下角，正好落在这条空白面板底上，不遮时钟 / 任务按钮。
-改小 → 按钮压住时钟；改大 → 时钟被推到过左（`tint2rc:169-173` 注释，`Dockerfile:235` 门禁）。
+改小 → 按钮压住时钟；改大 → 时钟被推到过左（`tint2rc:169-173` 注释，`Dockerfile:261` 门禁）。
 
 ### 7.1 系统默认字体 = Noto CJK SC
 
 镜像在 fontconfig 层把系统默认字体钉成 **Noto CJK SC**：策略文件
 `docker/fonts/99-kasmweb-cjk.conf`（172 行）装到容器
-`/etc/fonts/conf.d/99-kasmweb-cjk.conf`（0644，`Dockerfile:107` COPY +
-`Dockerfile:134` 强制权限）。凡走 fontconfig 解析通用族的应用全部受益 ——
+`/etc/fonts/conf.d/99-kasmweb-cjk.conf`（0644，`Dockerfile:112` COPY +
+`Dockerfile:141` 强制权限）。凡走 fontconfig 解析通用族的应用全部受益 ——
 GTK 应用、openbox 窗口标题与右键菜单、pcmanfm、xterm 等（tint2 与 openbox 另有显式字体，见下）；
 编号 99 保证它在通用/语言规则（45/60/65 系）之后解析，alias-prefer 与 prepend
 赢得族序。三个 generic family 的映射（Latin 回退保留）：
@@ -706,7 +767,7 @@ C dockerd 记账的 health OK 行 / D 声明-实值一致 + 时间因果，`mana
 | 三桌 backend / relay / 宿主显示 | 25321·6310·:310 / 25322·6311·:311 / 25323·6312·:312 | `manager/config.py:701-705` |
 | dispatcher 入口 | `127.0.0.1:25320` | `dispatcher/lib/config.js:40-41` |
 | 后端端口池 | `25321..25329`（连接 host 恒 `127.0.0.1`） | `config.js:44-46,125-126` |
-| 容器内端口 | nginx 3000（唯一发布）/ Xvnc httpd 6901 / 音频 relay 4901（后二只绑 loopback） | `config.py:599`，`docker/s6/svc-kasmvnc/run:143`，`docker/audio/relay.js:64-65`，`docker/Dockerfile:400-411` |
+| 容器内端口 | nginx 3000（唯一发布）/ Xvnc httpd 6901 / 音频 relay 4901（后二只绑 loopback） | `config.py:599`，`docker/s6/svc-kasmvnc/run:143`，`docker/audio/relay.js:64-65`，`docker/Dockerfile:475-486` |
 | 启动几何 / 帧率（manager 注入） | 1600 x 900 @ 30 | `config.py:581-583` |
 | 几何合法区间 | W 320..4096，H 240..4096 | `config.py:589-592` |
 | compose 固定面 | `restart: unless-stopped` / `network_mode: bridge` / `shm_size: 1g` / `tmpfs: [/tmp]` / 三 bind / 三 label | `manager/compose.py:56-73`，`config.py:595` |
@@ -716,7 +777,7 @@ C dockerd 记账的 health OK 行 / D 声明-实值一致 + 时间因果，`mana
 | X root 归属属性 | `_WT_KASM_DESKTOP_ID` / `_WT_KASM_GENERATION` | `appshare.py:126`，`docker/windowing/startwm.sh:73-79` |
 | launch.sock 键集合 | 恰好 `{action, appId}` | `manager/daemon.py:4-6` |
 | tint2 | `panel_items = TC` / `panel_size = 100% 30` / `clock_padding = 44 0` / `panel_window_name = wtk-taskbar` | `docker/windowing/tint2/tint2rc:84,85,173,100` |
-| 系统默认字体 | fontconfig 钉 `Noto Sans CJK SC`（sans/sans-serif）、`Noto Serif CJK SC`（serif）、`Noto Sans Mono CJK SC`（monospace）；`lang=zh` 强前置 SC | `docker/fonts/99-kasmweb-cjk.conf`，`docker/Dockerfile:107,134,355-394`（§7.1） |
+| 系统默认字体 | fontconfig 钉 `Noto Sans CJK SC`（sans/sans-serif）、`Noto Serif CJK SC`（serif）、`Noto Sans Mono CJK SC`（monospace）；`lang=zh` 强前置 SC | `docker/fonts/99-kasmweb-cjk.conf`，`docker/Dockerfile:112,141,390-420`（§7.1） |
 | 字体安装包 | apk `font-noto-cjk` + `font-noto-emoji` + `font-dejavu` + `ttf-liberation`（基座自带 `font-noto` 无 CJK） | `docker/apk/packages.txt:12-15` |
 | openbox 字体 | `rc.xml` 六个 `<font place>` 显式 `Noto Sans CJK SC` | `docker/windowing/openbox/rc.xml:70-123` |
 | Xvnc 监听面与会话寿命 | `-interface 127.0.0.1 -websocketPort 6901 -rfbport 0 -nolisten tcp -sslOnly 0 -PublicIP 127.0.0.1`；`-AlwaysShared -DisconnectClients 0 -MaxIdleTime 0 -IdleTimeout 0` | `docker/s6/svc-kasmvnc/run:142-148` |
@@ -724,7 +785,10 @@ C dockerd 记账的 health OK 行 / D 声明-实值一致 + 时间因果，`mana
 | 容器健康 OK 行 | `healthcheck: OK (http=… geom=… resize=native gen=… cjk=…)` | `docker/healthcheck.sh:247` |
 | dispatcher 健康 | `GET /healthz` → `ok desktops=<N>` | `dispatcher/server.js:203-206` |
 | 音频 relay 健康 | `GET :4901/healthz` → `{ok,live,producer,bytes,monitor}` | `docker/audio/relay.js:553-556` |
-| 基座 digest | `sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d` | `docker/Dockerfile:36,90` |
+| 基座 digest | `sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d` | `docker/Dockerfile:40,98` |
+| 浏览器通道 | 两条，可同时运行：宿主桥 Chrome（图标 `Chrome.desktop`）+ 容器内 Chromium 112（图标 `Chrome-Local.desktop` → `/opt/wtk/bin/wtk-chrome-local`） | `docker/windowing/desktop/`，`docker/bin/wtk-chrome-local`，§6.5 |
+| 容器内浏览器包 | apk `chromium` = 112.0.5615.165-r0（Alpine 3.17 community）；入口 `/usr/bin/chromium-browser`（**无** `/usr/bin/chromium`） | `docker/apk/packages.txt:8`，`Dockerfile:454-469` |
+| 容器内浏览器 argv | 固定 `--no-sandbox --no-first-run --no-default-browser-check` + 透传 `$@`（不接外部输入通道） | `docker/bin/wtk-chrome-local:55` |
 | 新鲜度门 | 90000ms / 60000ms（只可收紧） | `dispatcher/lib/config.js:66,69,134-135` |
 
 ## 11. 验收清单
@@ -765,8 +829,14 @@ docker exec wt-kasm-chrome-1 /opt/wtk/bin/healthcheck.sh
 docker exec wt-kasm-chrome-1 sh -c 'fc-match -f "%{family[0]}\n" sans-serif "sans-serif:lang=zh-cn"'
 #   期望两行逐字 = Noto Sans CJK SC（serif / monospace 分别 → Noto Serif CJK SC /
 #   Noto Sans Mono CJK SC；映射表见 §7.1）。构建期已有硬门禁逐字断言这四条
-#   （§4 门禁 9，`Dockerfile:355-394`）；运行时这条只用于复核现容器没被后续层
+#   （§4 门禁 9，`Dockerfile:390-420`）；运行时这条只用于复核现容器没被后续层
 #   改动破坏字体策略（healthcheck 门 9 是弱判，见 §13 第 9 条）
+
+# 5c) 容器内浏览器通道在运行容器里可用（与构建期门禁同一探针；GUI 可见另算 4 级）
+docker exec wt-kasm-chrome-1 sh -c 'command -v chromium-browser && chromium-browser --version'
+#   期望 /usr/bin/chromium-browser + 'Chromium 112.0.5615.165'
+docker exec wt-kasm-chrome-1 sh -c 'ls -l /defaults/desktop'
+#   期望恰好 Chrome.desktop + Chrome-Local.desktop（0755）
 
 # 6) 逐桌 12 项 plumbing 体检（rc=0 = 12/12）
 cd kasmweb
@@ -879,9 +949,10 @@ systemd unit 与其 drop-in（`WT_KASM_IMAGE` / `WT_KASM_PROJECT_SUFFIX` / `WTK_
 
 ## 13. 已知限制与未覆盖（如实列出）
 
-1. **桌面图标双击依赖宿主应用与 `launch.sock` 已就位**：manager 未起、卷未挂、
+1. **宿主桥图标（`Chrome`）双击依赖宿主应用与 `launch.sock` 已就位**：manager 未起、卷未挂、
    `appId` 未注册 ⇒ `wtk-launch` 退出码 3 / 4 / 5。**不提供「双击恢复」**：图标点击失败后
-   由 manager 的 `app start` / `app focus` 恢复，容器侧无自愈逻辑。
+   由 manager 的 `app start` / `app focus` 恢复，容器侧无自愈逻辑。容器内图标
+   （`Chrome（容器内）`）不受此限制（§6.5），它的双击只依赖镜像内的 apk `chromium`。
 2. **Kasm 1.1 客户端在 iframe 内默认 `resize=off`**，URL query 优先于 localStorage
    ⇒ **无参 URL 的 iframe 表现未验证**。本项目不承诺「URL 无参即随 iframe 自适应」：
    服务端许可（本镜像 argv 不传 `-AcceptSetDesktopSize` = 原生 accept）、
@@ -896,9 +967,11 @@ systemd unit 与其 drop-in（`WT_KASM_IMAGE` / `WT_KASM_PROJECT_SUFFIX` / `WTK_
 5. **容器不提供开机自愈 / 应用自启**：宿主应用与每桌 X11 relay 由 manager 按需拉起，
    容器由 `restart: unless-stopped` + docker 守护负责，daemon **不做 keepalive 循环**
    （`manager/daemon.py:8`）。「宿主机重启后是否可用」属未验证面，不得声称。
-6. **容器内不安装宿主浏览器**：Chrome 由宿主提供并经 appshare 接入
+6. **宿主桥 Chrome 依赖宿主侧就位**：桥接的 Chrome 由宿主提供并经 appshare 接入
    （`manager/hostapps.py:583-620` 固定 argv（`--url` 只收 http/https 绝对 URL，§6.4）+ 私有 profile + 版本期望 `153.0.8010.12`）。
-   没有宿主 Chrome 时，桌面只剩纯色底 + 任务栏 + 一个点了会失败的图标。
+   没有宿主 Chrome 时，`Chrome` 图标点了会失败（退出码 3/4/5，§6.2）；此时桌面仍有
+   **容器内 Chromium 112** 可用（`Chrome-Local` 图标，§6.5）——纯色底 + 任务栏 + 可起的浏览器。
+   容器内通道自身的限制（112 版本较旧、`--no-sandbox`、profile 随桌共享）见 §6.5 末段。
 7. **native 变体镜像按旧 attestation 契约不可签发**：`manager/attest.py` 的 gate B 要求
    Xvnc argv 出现 `-AcceptSetDesktopSize <声明值>` 并与声明一致，gate D 要求镜像内两份件
    字节 == canonical 源树字节 ⇒ 本镜像 argv 无该旗标即拒（**无绕过面**：未改 attest、

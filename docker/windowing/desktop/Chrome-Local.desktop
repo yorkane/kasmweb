@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Chrome（容器内）
+Comment=Launch the in-container Chromium
+Exec=/opt/wtk/bin/wtk-chrome-local
+Icon=/opt/wtk/windowing/desktop/icons/chrome.png
+Terminal=false
+StartupNotify=false

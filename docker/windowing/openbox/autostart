@@ -45,25 +45,30 @@ fi
 # Desktop icons: pcmanfm runs as a DESKTOP MANAGER ONLY (root 2026-11-13: the
 # user wants double-clickable icons). Openbox stays the only window manager -
 # `pcmanfm --desktop` draws the desktop layer and icon grid, it never reparents
-# app windows. This product ships exactly ONE MANAGED icon: Chrome, in the image
-# at /defaults/desktop/Chrome.desktop. It is re-seeded on EVERY start with a
-# force copy of that one name, then chmod 0755 (carried over from the 2-file
-# 0.1.2 ruling; the single-icon product narrows the managed set to Chrome).
+# app windows. This product ships exactly TWO MANAGED icons - Chrome (host
+# bridge) at /defaults/desktop/Chrome.desktop and Chrome-Local (in-container
+# Chromium) at /defaults/desktop/Chrome-Local.desktop - and both are re-seeded
+# on EVERY start with a force copy of those names, then chmod 0755.
+# The force copy is what makes the NEW icon appear on an EXISTING /config
+# volume: the seed runs every start and overwrites the managed names, so a
+# container that only ever had Chrome.desktop picks up Chrome-Local.desktop on
+# its first boot on the new image (no manual step). It also refreshes a stale
+# 0644 copy, which is why cp -n stays rejected.
 # cp -n was rejected: containers already seeded with a 0644 icon would never
-# pick up the shipped fix, so the upgrade would not take effect. Only this name
-# is managed - a file the user adds to ~/Desktop is untouched, and a deletion
-# is restored on the next start by design (managed affordance, not user
-# content).
+# pick up the shipped fix, so the upgrade would not take effect. Only these
+# names are managed - a file the user adds to ~/Desktop is untouched, and a
+# deletion is restored on the next start by design (managed affordance, not
+# user content).
 # 0755 (not 0644): libfm 1.3.2 fm_file_info_is_executable_type accepts an
 # application/x-desktop with only a read bit, but the launch needs the file to
 # survive libfm's own executable check under quick_exec, and an exec bit is the
 # unambiguous contract for a launchable launcher.
 install -d -m 700 "$HOME/Desktop"
 if [ -d /defaults/desktop ]; then
-  for f in Chrome; do
+  for f in Chrome Chrome-Local; do
     cp -f "/defaults/desktop/$f.desktop" "$HOME/Desktop/$f.desktop" 2>/dev/null || true
   done
-  chmod 0755 "$HOME/Desktop/Chrome.desktop" 2>/dev/null || true
+  chmod 0755 "$HOME/Desktop/Chrome.desktop" "$HOME/Desktop/Chrome-Local.desktop" 2>/dev/null || true
 fi
 # Seed pcmanfm desktop config once; keys read from lxde/pcmanfm 1.3.2 sources
 # (desktop.c config keys): solid colour, no trash/documents/mounts.
