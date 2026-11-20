@@ -23,6 +23,8 @@
 !nginx/
 !nginx/render-nginx.py
 !nginx/wtk.conf.template
+!fonts/
+!fonts/99-kasmweb-cjk.conf
 !pulse/
 !pulse/20-wtk-app-share.pa
 !s6/

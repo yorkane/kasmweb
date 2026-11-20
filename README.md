@@ -14,6 +14,8 @@
 
 - **单镜像**：基座 `ghcr.io/linuxserver/baseimage-kasmvnc:alpine317` 按 digest 钉死，内含
   KasmVNC 1.1.0 Xvnc + Openbox + tint2 + pcmanfm + PulseAudio + nginx + 音频 relay + s6 服务图。
+  **默认字体 = Noto Sans CJK SC**（镜像内 fontconfig 策略钉死 sans / serif / monospace，
+  中文渲染不再是日文字形或方块；deploy.md §7.1）。
 - **单入口**：dispatcher 只监听 `127.0.0.1:25320`，按 registry 路由到 `127.0.0.1:25321..25329`；
   `GET /?desktop=<id>` → 302 root-relative 规范 URL（Location 不拼 origin）。
 - **画面通道**：容器内 nginx `:3000` → Xvnc 内置 httpd `127.0.0.1:6901` 的 `/websockify`；
@@ -58,13 +60,13 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:25322/
 | §4 | 镜像与标签、CI 发布、本机构建、基座 digest、构建门禁摘要 |
 | §5 | 多桌部署：unit 安装、registry、端口池、全部环境变量清单 |
 | §6 | 宿主应用接入：appshare 契约文件、`launch.sock` 协议、`.desktop` 模板、PID 台账 |
-| §7 | 桌面与任务栏：tint2 要点、`panel_items = TC`、`clock_padding = 44 0` 的用途 |
+| §7 | 桌面与任务栏：tint2 要点、`panel_items = TC`、`clock_padding = 44 0` 的用途、**系统默认字体 = Noto CJK SC**（§7.1） |
 | §8 | 音频：链路图、Pulse 凭据、relay env、启用/关闭语义、常见故障判据 |
 | §9 | URL 与分辨率：302 规范参数、`resize` 三档、geometry 三种模式与 409/503 |
 | §10 | 配置项速查表（env / 默认 / 作用 / `file:line` 出处） |
-| §11 | 验收清单：healthz / 302 / 容器 health / 逐桌 verify / 浏览器出图与任务栏点击 / 音频频谱 |
+| §11 | 验收清单：healthz / 302 / 容器 health / 逐桌 verify / 字体解析 / 浏览器出图与任务栏点击 / 音频频谱 |
 | §12 | 运维：升级、回滚（旧容器保留策略 + 人工恢复顺序）、日志位置、备份范围 |
-| §13 | 已知限制与未覆盖（7 条 + 明确「非全功能验收」） |
+| §13 | 已知限制与未覆盖（9 条 + 明确「非全功能验收」） |
 | §14 | 许可与商标 |
 
 ## 目录结构
@@ -76,6 +78,7 @@ kasmweb/
 ├── docker/                镜像内容层（构建上下文 = 本目录，docker/Dockerfile 为入口）
 │   ├── Dockerfile         两段构建（deps -> release）+ 十项门禁
 │   ├── apk/               构建期安装包清单
+│   ├── fonts/             99-kasmweb-cjk.conf（系统默认字体 = Noto CJK SC 的 fontconfig 策略）
 │   ├── s6/                服务图：svc-kasmvnc / svc-de / svc-nginx / svc-pulseaudio /
 │   │                      svc-wtk-audio + init-nginx / init-wtk-appshare + s6-apply.sh
 │   ├── windowing/         openbox（rc.xml / autostart / menu）、tint2/tint2rc、

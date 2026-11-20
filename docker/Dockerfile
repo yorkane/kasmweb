@@ -104,6 +104,7 @@ COPY bin/wtk-launch /opt/wtk/bin/wtk-launch
 COPY bin/wtk-xauth-seed /opt/wtk/bin/wtk-xauth-seed
 COPY healthcheck.sh /opt/wtk/bin/healthcheck.sh
 COPY pulse/20-wtk-app-share.pa /etc/pulse/default.pa.d/20-wtk-app-share.pa
+COPY fonts/99-kasmweb-cjk.conf /etc/fonts/conf.d/99-kasmweb-cjk.conf
 COPY windowing/openbox/rc.xml /etc/xdg/openbox/rc.xml
 COPY windowing/openbox/menu.xml /defaults/menu.xml
 COPY windowing/openbox/autostart /defaults/autostart
@@ -130,6 +131,7 @@ RUN set -eu; \
                /opt/wtk/nginx/wtk.conf.template /etc/xdg/openbox/rc.xml \
                /defaults/menu.xml /opt/wtk/windowing/tint2/tint2rc \
                /etc/pulse/default.pa.d/20-wtk-app-share.pa \
+               /etc/fonts/conf.d/99-kasmweb-cjk.conf \
                /opt/wtk/windowing/desktop/libfm.conf \
                /opt/wtk/windowing/desktop/icons/*.png; \
     for d in svc-kasmvnc svc-de svc-nginx svc-pulseaudio svc-wtk-audio init-nginx init-wtk-appshare; do \
@@ -350,14 +352,46 @@ RUN set -eu; \
     fi; \
     echo "graph: compiled graph free of removed services - OK ($n services)"
 
-# --- CJK font gate (zh-cn resolving to DejaVu = hard FAIL) --------------------
+# --- CJK font gate (hard assertions; any miss = build FAIL) --------------------
+# Policy = docker/fonts/99-kasmweb-cjk.conf (installs to
+# /etc/fonts/conf.d/99-kasmweb-cjk.conf, 0644). The gate below is the
+# contract-check for that file: every assertion is an exact literal family
+# compare, so a JP/KR/TC/DEJAVU fallthrough fails the build, not the desktop.
+# Gate order: fc-cache -> file present/perm -> list CJK SC families -> four
+# fc-match assertions (zh-cn / default sans / serif / monospace) -> DejaVu
+# negative. All four use fc-match -f %{family[0]} (the same probe the runtime
+# healthcheck gate #9 uses).
 RUN set -eu; \
+    test -f /etc/fonts/conf.d/99-kasmweb-cjk.conf \
+      || { echo "gate cjk: FAIL - /etc/fonts/conf.d/99-kasmweb-cjk.conf absent" >&2; exit 1; }; \
+    perm=$(stat -c '%a' /etc/fonts/conf.d/99-kasmweb-cjk.conf); \
+    test "$perm" = "644" \
+      || { echo "gate cjk: FAIL - conf.d mode is $perm, want 644" >&2; exit 1; }; \
     fc-cache -f >/dev/null 2>&1 || true; \
+    echo "--- fc-list CJK SC family names (must contain the three below) ---"; \
+    fc-list : family | awk -F, '{for(i=1;i<=NF;i++) print $i}' | sed 's/^ *//;s/ *$//' | grep -E '^Noto (Sans|Serif|Sans Mono) CJK SC$' | sort -u; \
+    fc-list : family | grep -q 'Noto Sans CJK SC' \
+      || { echo "gate cjk: FAIL - font-noto-cjk exposes no 'Noto Sans CJK SC' family" >&2; exit 1; }; \
     fam=$(fc-match -f '%{family[0]}' 'sans-serif:lang=zh-cn'); \
     echo "gate cjk: fc-match sans-serif:lang=zh-cn -> [$fam]"; \
-    test -n "$fam"; \
-    case "$fam" in *DejaVu*) echo "gate cjk: FAIL - zh-cn resolves to $fam (font-noto-cjk not effective)" >&2; exit 1 ;; esac; \
-    echo "gate cjk: ok"
+    test "$fam" = "Noto Sans CJK SC" \
+      || { echo "gate cjk: FAIL - zh-cn resolves to [$fam], want exactly [Noto Sans CJK SC]" >&2; exit 1; }; \
+    fam=$(fc-match -f '%{family[0]}' 'sans-serif'); \
+    echo "gate cjk: fc-match sans-serif            -> [$fam]"; \
+    test "$fam" = "Noto Sans CJK SC" \
+      || { echo "gate cjk: FAIL - default sans resolves to [$fam], want exactly [Noto Sans CJK SC]" >&2; exit 1; }; \
+    fam=$(fc-match -f '%{family[0]}' 'serif'); \
+    echo "gate cjk: fc-match serif                 -> [$fam]"; \
+    test "$fam" = "Noto Serif CJK SC" \
+      || { echo "gate cjk: FAIL - serif resolves to [$fam], want exactly [Noto Serif CJK SC]" >&2; exit 1; }; \
+    fam=$(fc-match -f '%{family[0]}' 'monospace'); \
+    echo "gate cjk: fc-match monospace             -> [$fam]"; \
+    test "$fam" = "Noto Sans Mono CJK SC" \
+      || { echo "gate cjk: FAIL - monospace resolves to [$fam], want exactly [Noto Sans Mono CJK SC]" >&2; exit 1; }; \
+    case "$(fc-match -f '%{family[0]}' 'sans-serif:lang=zh-cn')" in \
+      *DejaVu*) echo "gate cjk: FAIL - zh-cn resolves to a DejaVu family" >&2; exit 1 ;; \
+    esac; \
+    echo "gate cjk: all hard assertions PASS (zh-cn / default sans / serif / mono = * CJK SC; DejaVu negative ok)"
 
 # --- container contract -------------------------------------------------------
 # Contract env defaults = probe contract; compose repeats geometry per desktop.

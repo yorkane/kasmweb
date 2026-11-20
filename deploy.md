@@ -20,7 +20,7 @@
 
 桌面**只有一个官方图标 = Chrome**（Chromium 官方 product logo，
 `docker/windowing/desktop/Chrome.desktop`，构建门禁要求 `/defaults/desktop` **恰好 1 个条目**，
-`docker/Dockerfile:176-189`）。图标只是宿主应用接入机制的入口示例：接别的应用按同一
+`docker/Dockerfile:178-191`）。图标只是宿主应用接入机制的入口示例：接别的应用按同一
 `launch.sock` 协议加一个 `.desktop` 即可（§6）。
 
 ## 2. 架构与数据流
@@ -68,7 +68,7 @@
 ## 3. 快速开始（最小路径）
 
 单桌面直接跑容器；要多桌统一入口与规范参数注入再叠 dispatcher（§5）。
-镜像内只有 `EXPOSE 3000`（`docker/Dockerfile:381`），6901 / 4901 只绑容器 loopback。
+镜像内只有 `EXPOSE 3000`（`docker/Dockerfile:415`），6901 / 4901 只绑容器 loopback。
 
 ```bash
 # 0) 仓库里已有两份可直接改用的示例：
@@ -135,7 +135,7 @@ docker inspect -f '{{.State.Health.Status}}' wt-kasm-chrome-1
 文法 = `/` 后接零个或多个 `[A-Za-z0-9._-]` 段、每段以 `/` 结尾 ⇒ `/`（单容器根部署）
 与 `/desktop/<id>/`（dispatcher 多桌挂载）**两种形态都支持**；非法形态与含 `..` 的穿越段
 显式拒绝（exit 2，fail-closed）。构建门禁对两种形态各渲染一次 vhost 并分别 `nginx -t`，
-全过才放行（`Dockerfile:286-314`）——旧文法拒 `/` 导致根部署起不来的缺陷已修复并进门禁。
+全过才放行（`Dockerfile:288-316`）——旧文法拒 `/` 导致根部署起不来的缺陷已修复并进门禁。
 
 （本节 `D=/data/app/kasmweb/...` = 手跑示例目录；生产与 manager 现势根 = `/data/app/webtop-kasmvnc`，见 §5.1。）
 
@@ -171,8 +171,8 @@ curl -s -o /dev/null -D - 'http://127.0.0.1:25320/?desktop=chrome-1' | sed -n '1
 | 两段构建 | `FROM <base> AS deps`（apk 层）+ `FROM deps AS release`（内容层） | `docker/Dockerfile:38,80` |
 | 基座（钉 digest） | `ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d`，LABEL 记 name=`:alpine317` | `docker/Dockerfile:36,89-90` |
 | 版本标签 | `ARG WTK_VERSION=0.1.0`（两段共用） | `docker/Dockerfile:39,81` |
-| 暴露端口 | `EXPOSE 3000`（仅此一个） | `docker/Dockerfile:381` |
-| HEALTHCHECK | `--interval=20s --timeout=30s --start-period=60s --retries=6` → `/opt/wtk/bin/healthcheck.sh` | `docker/Dockerfile:387-388` |
+| 暴露端口 | `EXPOSE 3000`（仅此一个） | `docker/Dockerfile:415` |
+| HEALTHCHECK | `--interval=20s --timeout=30s --start-period=60s --retries=6` → `/opt/wtk/bin/healthcheck.sh` | `docker/Dockerfile:421-422` |
 
 本机构建（CI 会 `--pull` 基座 digest；离线开发机把 `WTK_BASE` 指到本地别名 tag）：
 
@@ -196,28 +196,33 @@ bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 六项布
    探测，不可达即 `exit 3`，**不回落镜像站**（`Dockerfile:51-59`）。
 2. **native 几何门禁**：`svc-kasmvnc/run` 与 `healthcheck.sh` 按 sha256 自锁
    （`WTK_NATIVE_SVC_SHA256` / `WTK_NATIVE_HC_SHA256`，`Dockerfile:87-88`），
-   且 argv 里 `-AcceptSetDesktopSize` 出现次数**必须为 0**（`Dockerfile:156-157`）。
+   且 argv 里 `-AcceptSetDesktopSize` 出现次数**必须为 0**（`Dockerfile:158-159`）。
 3. **桌面图标门禁**：`/defaults/desktop` 恰好 1 个条目；`Chrome.desktop` 的
    `Exec` 必须逐字以 `/opt/wtk/bin/wtk-launch chrome` 开头、mode 755、
-   `Icon=` 指向的文件存在且是 PNG（`Dockerfile:176-189`）。
+   `Icon=` 指向的文件存在且是 PNG（`Dockerfile:178-191`）。
 4. **autostart 门禁**：必须含 Chrome-only 的 `chmod 0755 "$HOME/Desktop/Chrome.desktop"`
-   强制播种；出现 `cp -n` 播种或 `VCMI` 残留 = FAIL（`Dockerfile:224-227`）。
+   强制播种；出现 `cp -n` 播种或 `VCMI` 残留 = FAIL（`Dockerfile:226-229`）。
 5. **任务栏门禁**：`panel_items` 必须逐字 = `TC`、`clock_padding = 44 0`、
    `panel_size = 100% 30`、`panel_window_name = wtk-taskbar`、
-   `rc.xml` 保留 `wtk-taskbar` 匹配；出现 `systray_` / `launcher_` 键 = FAIL（`Dockerfile:230-239`）。
+   `rc.xml` 保留 `wtk-taskbar` 匹配；出现 `systray_` / `launcher_` 键 = FAIL（`Dockerfile:232-241`）。
 6. **libfm quick_exec 合并**：只把注入键合进基座 `[config]`，基座键与 section 数逐字保留，
-   原件 `mv` 归档（零 rm）（`Dockerfile:198-222`）。
+   原件 `mv` 归档（零 rm）（`Dockerfile:200-224`）。
 7. **vhost 门禁**：对 `/desktop/demo/` 与 `/` 两种 base 形态**各渲染一次** vhost 并分别
-   `nginx -t`，被拒即 FAIL（`Dockerfile:286-314`）。
+   `nginx -t`，被拒即 FAIL（`Dockerfile:288-316`）。
 8. **s6 图门禁**：`s6-apply.sh` 归档式摘除 `svc-kclient` / `svc-docker` /
    `init-mods-package-install` 并改写边，随后逐边断言 + 悬空边审计 + `s6-rc-compile` RC=0 +
    编译图服务数 ≥ 20 + 保留 `/kclient/node_modules/ws`（音频 relay 的 ws 回退依赖）
-   （`Dockerfile:322-351`）。
-9. **CJK 门禁**：`fc-match sans-serif:lang=zh-cn` 落到 DejaVu = 硬 FAIL（`Dockerfile:354-360`）。
+   （`Dockerfile:324-353`）。
+9. **CJK 字体门禁**：`/etc/fonts/conf.d/99-kasmweb-cjk.conf` 必须存在且权限 `644`；
+   `fc-list` 必须暴露 `Noto Sans CJK SC`；四条 `fc-match -f '%{family[0]}'` 断言**逐字**命中
+   `sans-serif:lang=zh-cn` → `Noto Sans CJK SC`、`sans-serif` → `Noto Sans CJK SC`、
+   `serif` → `Noto Serif CJK SC`、`monospace` → `Noto Sans Mono CJK SC`，另加 DejaVu
+   负例（zh-cn 落 DejaVu 族即 FAIL）。任一失配 = 构建失败，JP/KR/TC/DejaVu 兜底
+   在构建期就出局，不留到桌面（`Dockerfile:355-394`）。策略文件本体见 §7.1。
 10. **零 rm 纪律**：门禁止物进 `/opt/wtk-build-residue` 保留，`/var/cache/apk` 不清理。
 
 镜像内容层的完整 COPY 落位表由镜像侧文档维护（`docker/` 树 = 镜像内容层（CI 构建上下文即
-本目录），落位见 `Dockerfile:98-121`）。
+本目录），落位见 `Dockerfile:98-122`）。
 
 ## 5. 多桌部署（manager + dispatcher）
 
@@ -452,7 +457,7 @@ WTK_APPSHARE=/run/wt-kasm-app /opt/wtk/bin/wtk-launch chrome
 ### 6.3 桌面图标与 .desktop 模板
 
 镜像内置图标在 `/defaults/desktop/Chrome.desktop`，`/defaults/autostart` 每次启动**强制复制**
-到 `$HOME/Desktop` 并 `chmod 0755`（构建门禁明查，`docker/Dockerfile:224-227`；
+到 `$HOME/Desktop` 并 `chmod 0755`（构建门禁明查，`docker/Dockerfile:226-229`；
 禁止 `cp -n`，禁止 VCMI 播种残留）。逐字模板：
 
 ```ini
@@ -472,7 +477,7 @@ StartupNotify=false
 `APP_IDS_BY_DESKTOP`（`config.py:710`，opt-in 桌面清单 `WT_KASM_CATALOG_FILE` 可带自己的
 appIds，`config.py:938-946`）并给 `wtk-launch` 的本地词表加名。
 `libfm quick_exec=1` 在构建期合入基座配置，消掉双击时的「可执行脚本，要执行吗」对话框
-（`docker/Dockerfile:198-222`）。
+（`docker/Dockerfile:200-224`）。
 
 ### 6.4 宿主进程环境、PID 台账与零 pkill
 
@@ -525,7 +530,41 @@ tint2（`docker/windowing/tint2/tint2rc`，构建门禁逐字断言）：
 
 `clock_padding = 44 0` 的**右段是浏览器音频按钮的暗色落脚带**：Kasm 前端在每个观看者浏览器里
 把音频开关渲染在画布右下角，正好落在这条空白面板底上，不遮时钟 / 任务按钮。
-改小 → 按钮压住时钟；改大 → 时钟被推到过左（`tint2rc:169-173` 注释，`Dockerfile:232` 门禁）。
+改小 → 按钮压住时钟；改大 → 时钟被推到过左（`tint2rc:169-173` 注释，`Dockerfile:235` 门禁）。
+
+### 7.1 系统默认字体 = Noto CJK SC
+
+镜像在 fontconfig 层把系统默认字体钉成 **Noto CJK SC**：策略文件
+`docker/fonts/99-kasmweb-cjk.conf`（172 行）装到容器
+`/etc/fonts/conf.d/99-kasmweb-cjk.conf`（0644，`Dockerfile:107` COPY +
+`Dockerfile:134` 强制权限）。凡走 fontconfig 解析通用族的应用全部受益 ——
+GTK 应用、openbox 窗口标题与右键菜单、pcmanfm、xterm 等（tint2 与 openbox 另有显式字体，见下）；
+编号 99 保证它在通用/语言规则（45/60/65 系）之后解析，alias-prefer 与 prepend
+赢得族序。三个 generic family 的映射（Latin 回退保留）：
+
+| generic | 解析到（family[0]） | 回退链 |
+|---|---|---|
+| `sans-serif` / `sans` | **Noto Sans CJK SC** | DejaVu Sans → Liberation Sans → Noto Sans |
+| `serif` | **Noto Serif CJK SC** | DejaVu Serif → Liberation Serif → Noto Serif |
+| `monospace` | **Noto Sans Mono CJK SC** | DejaVu Sans Mono → Liberation Mono |
+
+语言规则：`lang` 含 `zh`（`zh / zh-cn / zh-hans / zh-sg / zh-tw / zh-hk`，按
+`compare="contains"` 匹配）时对四个 generic 强前置 SC 族，并把 Chrome/GTK 硬编码的
+`Noto Sans CJK JP/KR/TC/HK` 请求在 zh 语境下前置 SC。**设计取舍：zh-tw / zh-hk
+也落 SC** —— SC 字形可读繁体，逐区路由（繁落 TC/HK）明确不在本期范围。
+另含 CJK 渲染 hygiene（对族名含 CJK 的字体统一 antialias + hintslight +
+rgb/lcddefault + `embeddedbitmap=false`，用矢量轮廓不用位图点阵）。
+
+openbox 侧不依赖该层兜底：`docker/windowing/openbox/rc.xml:70-123` 的六个
+`<font place>`（ActiveWindow / InactiveWindow / MenuHeader / MenuItem /
+ActiveOnScreenDisplay / InactiveOnScreenDisplay）显式写死 `Noto Sans CJK SC`。
+tint2 的任务按钮 / 时钟 / 提示字体本来就是 `Noto Sans CJK SC 9`
+（`tint2rc:138,167,212`，本轮未改）。
+
+字体包 = apk `font-noto-cjk`（+`font-noto-emoji` / `font-dejavu` /
+`ttf-liberation`；基座自带 `font-noto` 无 CJK），见 `docker/apk/packages.txt:12-15`。
+`docker/.dockerignore` 的 allowlist 已含 `!fonts/` 与 `!fonts/99-kasmweb-cjk.conf`
+（`.dockerignore:26-27`）—— 漏了这两行 conf 就进不了构建上下文。
 
 ## 8. 最简音频
 
@@ -667,7 +706,7 @@ C dockerd 记账的 health OK 行 / D 声明-实值一致 + 时间因果，`mana
 | 三桌 backend / relay / 宿主显示 | 25321·6310·:310 / 25322·6311·:311 / 25323·6312·:312 | `manager/config.py:701-705` |
 | dispatcher 入口 | `127.0.0.1:25320` | `dispatcher/lib/config.js:40-41` |
 | 后端端口池 | `25321..25329`（连接 host 恒 `127.0.0.1`） | `config.js:44-46,125-126` |
-| 容器内端口 | nginx 3000（唯一发布）/ Xvnc httpd 6901 / 音频 relay 4901（后二只绑 loopback） | `config.py:599`，`docker/s6/svc-kasmvnc/run:143`，`docker/audio/relay.js:64-65`，`docker/Dockerfile:366-377` |
+| 容器内端口 | nginx 3000（唯一发布）/ Xvnc httpd 6901 / 音频 relay 4901（后二只绑 loopback） | `config.py:599`，`docker/s6/svc-kasmvnc/run:143`，`docker/audio/relay.js:64-65`，`docker/Dockerfile:400-411` |
 | 启动几何 / 帧率（manager 注入） | 1600 x 900 @ 30 | `config.py:581-583` |
 | 几何合法区间 | W 320..4096，H 240..4096 | `config.py:589-592` |
 | compose 固定面 | `restart: unless-stopped` / `network_mode: bridge` / `shm_size: 1g` / `tmpfs: [/tmp]` / 三 bind / 三 label | `manager/compose.py:56-73`，`config.py:595` |
@@ -677,6 +716,9 @@ C dockerd 记账的 health OK 行 / D 声明-实值一致 + 时间因果，`mana
 | X root 归属属性 | `_WT_KASM_DESKTOP_ID` / `_WT_KASM_GENERATION` | `appshare.py:126`，`docker/windowing/startwm.sh:73-79` |
 | launch.sock 键集合 | 恰好 `{action, appId}` | `manager/daemon.py:4-6` |
 | tint2 | `panel_items = TC` / `panel_size = 100% 30` / `clock_padding = 44 0` / `panel_window_name = wtk-taskbar` | `docker/windowing/tint2/tint2rc:84,85,173,100` |
+| 系统默认字体 | fontconfig 钉 `Noto Sans CJK SC`（sans/sans-serif）、`Noto Serif CJK SC`（serif）、`Noto Sans Mono CJK SC`（monospace）；`lang=zh` 强前置 SC | `docker/fonts/99-kasmweb-cjk.conf`，`docker/Dockerfile:107,134,355-394`（§7.1） |
+| 字体安装包 | apk `font-noto-cjk` + `font-noto-emoji` + `font-dejavu` + `ttf-liberation`（基座自带 `font-noto` 无 CJK） | `docker/apk/packages.txt:12-15` |
+| openbox 字体 | `rc.xml` 六个 `<font place>` 显式 `Noto Sans CJK SC` | `docker/windowing/openbox/rc.xml:70-123` |
 | Xvnc 监听面与会话寿命 | `-interface 127.0.0.1 -websocketPort 6901 -rfbport 0 -nolisten tcp -sslOnly 0 -PublicIP 127.0.0.1`；`-AlwaysShared -DisconnectClients 0 -MaxIdleTime 0 -IdleTimeout 0` | `docker/s6/svc-kasmvnc/run:142-148` |
 | 音频 relay env | 见 §8.2 | `docker/audio/relay.js:29-56` |
 | 容器健康 OK 行 | `healthcheck: OK (http=… geom=… resize=native gen=… cjk=…)` | `docker/healthcheck.sh:247` |
@@ -718,6 +760,13 @@ docker exec wt-kasm-chrome-1 /opt/wtk/bin/healthcheck.sh
 #   只验两个正整数，**不断言相等**）/ generation 握手 / tint2 存活 / relay+monitor /
 #   CJK / app.json / nginx worker=1 / pulse 2 socket+1 sink（docker/healthcheck.sh:54-74）
 #   全绿 = 管道通 = 3 级；不声明窗口可见、可点、像素在流
+
+# 5b) 系统默认字体解析（与构建期硬门禁同一探针）
+docker exec wt-kasm-chrome-1 sh -c 'fc-match -f "%{family[0]}\n" sans-serif "sans-serif:lang=zh-cn"'
+#   期望两行逐字 = Noto Sans CJK SC（serif / monospace 分别 → Noto Serif CJK SC /
+#   Noto Sans Mono CJK SC；映射表见 §7.1）。构建期已有硬门禁逐字断言这四条
+#   （§4 门禁 9，`Dockerfile:355-394`）；运行时这条只用于复核现容器没被后续层
+#   改动破坏字体策略（healthcheck 门 9 是弱判，见 §13 第 9 条）
 
 # 6) 逐桌 12 项 plumbing 体检（rc=0 = 12/12）
 cd kasmweb
@@ -861,7 +910,13 @@ systemd unit 与其 drop-in（`WT_KASM_IMAGE` / `WT_KASM_PROJECT_SUFFIX` / `WTK_
    registry mtime 新鲜度证据的可观察有效期**最长约 180s**（90s 刷新周期 ×3 门 + 90s 健康证据
    年龄上界，`dispatcher/lib/registry.js:26-31`），不得叙述成「90s 内确认存活」。
 
-**非全功能验收**（以上八条之外，本文未验，不得当已通过引用）：公开域名 + 登录态下的端到端
+9. **运行时字体判据仍是弱判**：容器 healthcheck 第 9 门只断言
+   `fc-match sans-serif:lang=zh-cn` 的 family[0] **非空且不含 DejaVu**
+   （`docker/healthcheck.sh:208-211`），**不逐字比对** `Noto Sans CJK SC`。逐字硬断言只发生在
+   构建期门禁（§4 第 9 项）⇒ 容器起来之后字体策略被后续层 / 手工放进的 conf 破坏
+   （例如落回 JP 族）healthcheck 不会告警。复核手段 = §11 第 5b 条那条命令。
+
+**非全功能验收**（以上九条之外，本文未验，不得当已通过引用）：公开域名 + 登录态下的端到端
 桌面会话（网关登录链未测）；`auto` / `fixed` 几何桌的实机 GUI；tint2 在帧缓冲尺寸变化下的
 reflow（本镜像全程以注入尺寸运行，变尺寸路径未验收）；音频按钮在非 1600 宽度下的布局
 （校准按 `scaleX = w/1600`）；音频「人耳听感」（本文件的量化口径是页面内 FFT，不等于试听）。
