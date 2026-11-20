@@ -45,7 +45,7 @@
 ARG WTK_BASE=ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d
 
 FROM ${WTK_BASE} AS deps
-ARG WTK_VERSION=0.1.0
+ARG WTK_VERSION=0.2.0
 LABEL org.opencontainers.image.title="kasmweb-deps" \
       org.opencontainers.image.version="${WTK_VERSION}" \
       org.opencontainers.image.description="Alpine 3.17 package layer on baseimage-kasmvnc:alpine317"
@@ -166,7 +166,7 @@ RUN set -eu; \
     echo 'sublime: stage complete (deb + unpack scratch archived in /opt/wtk-build-residue, zero rm)'
 
 FROM deps AS release
-ARG WTK_VERSION=0.1.0
+ARG WTK_VERSION=0.2.0
 ARG WTK_BUILD_DATE=unknown
 ARG WTK_SUBLIME_SHA256=79a687ffd749004eb4360243dc2133a68bbc8243f890ff3f8f5b00835870c7ea
 ARG WTK_SUBLIME_PATCH_SHA256=f145efb381d4cb8b5129cbfa1f180274cc0b9d39d7b05c88b9095d43a2ff9c36

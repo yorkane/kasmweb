@@ -179,7 +179,7 @@ curl -s -o /dev/null -D - 'http://127.0.0.1:25320/?desktop=chrome-1' | sed -n '1
 | 构建后自检 | `bash scripts/verify-image-layout.sh <tag>`（离线 `docker save` + tar 解包，**不 run 不 create**）十七项自检：桌面二件集合 + 两个 `Exec` 逐字 + 容器内启动器可执行 + `/usr/bin/chromium-browser` 存在 + tint2 + svc argv + healthcheck 门 + jsmpeg + 图标 PNG + Sublime 双二进制/post-sha/mimeapps 13 型/desktop 行（§7.2） | `publish.yml:106-115`，`scripts/verify-image-layout.sh:1-36` |
 | 两段构建 | `FROM <base> AS deps`（apk 层）+ `FROM deps AS release`（内容层） | `docker/Dockerfile:42,84` |
 | 基座（钉 digest） | `ghcr.io/linuxserver/baseimage-kasmvnc@sha256:e67ff31da12e6908fc6acbeaba499f9339794b1b622bcb2d945286a7257b755d`，LABEL 记 name=`:alpine317` | `docker/Dockerfile:40,97-98` |
-| 版本标签 | `ARG WTK_VERSION=0.1.0`（两段共用） | `docker/Dockerfile:43,85` |
+| 版本标签 | `ARG WTK_VERSION=0.2.0`（两段共用；CI 由 metadata-action 以 ref 名覆盖该 label：分支构建=main，打标签构建=v0.2.0） | `docker/Dockerfile:48,169` |
 | 暴露端口 | `EXPOSE 3000`（仅此一个） | `docker/Dockerfile:490` |
 | HEALTHCHECK | `--interval=20s --timeout=30s --start-period=60s --retries=6` → `/opt/wtk/bin/healthcheck.sh` | `docker/Dockerfile:496-497` |
 
@@ -187,7 +187,7 @@ curl -s -o /dev/null -D - 'http://127.0.0.1:25320/?desktop=chrome-1' | sed -n '1
 
 ```bash
 cd kasmweb
-docker build -f docker/Dockerfile --build-arg WTK_VERSION=0.1.0 \
+docker build -f docker/Dockerfile --build-arg WTK_VERSION=0.2.0 \
   -t ghcr.io/yorkane/kasmweb:latest docker
 # 离线机（基座已按精确 ID 打好本地别名 tag 时）：
 docker build -f docker/Dockerfile \
@@ -196,7 +196,8 @@ docker build -f docker/Dockerfile \
 bash scripts/verify-image-layout.sh ghcr.io/yorkane/kasmweb:latest   # 十七项布局自检
 ```
 
-已发布标签 = `latest` / `v0.1.0` / `0.1.0`；后续重建会重推同名标签，digest 以 CI 实际产出为准。
+已发布标签 = `latest` / `main` / `v0.2.0` / `0.2.0` / `0.2` / `2` / `sha-<commit>`；
+`v0.1.0` 及其镜像已于 2026-11-20 清理（本机只保留最新版本）；后续重建会重推同名标签，digest 以 CI 实际产出为准。
 
 构建门禁摘要（`docker/Dockerfile`，任一不过即构建失败）：
 
@@ -1025,7 +1026,7 @@ playwright-cli eval "() => window.__wdevLayout && window.__wdevLayout.audit()"
 
 ```bash
 cd kasmweb
-docker pull ghcr.io/yorkane/kasmweb:latest            # 已发布 latest / v0.1.0 / 0.1.0；digest 以 CI 实际产出为准
+docker pull ghcr.io/yorkane/kasmweb:latest            # 已发布 latest / v0.2.0 / 0.2.0 / 0.2 / 2；digest 以 CI 实际产出为准
 WT_KASM_IMAGE='ghcr.io/yorkane/kasmweb:latest' bash scripts/install-manager.sh   # 写进 unit 持久化
 ./scripts/wt-kasm stop chrome-1 && ./scripts/wt-kasm start chrome-1
 ./scripts/wt-kasm verify chrome-1                    # 期望 12/12
