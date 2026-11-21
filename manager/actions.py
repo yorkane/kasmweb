@@ -320,11 +320,19 @@ def stop_desk(desktop_id: str) -> dict:
             out["relay"] = {"ok": ok, "reason": why, "step": "relay"}
         else:
             out["relay"] = {"ok": True, "reason": "no-ledger", "step": "relay"}
+        # CDP relay（宿主 Chrome 的 DevTools 外发面）随停桌一并精确收掉；
+        # app stop 链（hostapps.stop_app）已先停过一次的这里按 no-ledger 幂等通过。
+        if process.read_ledger(net.cdp_relay_pidfile(desktop_id)):
+            ok, why = net.stop_cdp_relay(desktop_id)
+            out["cdp_relay"] = {"ok": ok, "reason": why, "step": "cdp-relay"}
+        else:
+            out["cdp_relay"] = {"ok": True, "reason": "no-ledger", "step": "cdp-relay"}
         out["compose"] = compose.stop(spec)
         out["compose"].setdefault("step", "compose")
         out["registry"] = registry.refresh()
         failed = ([a for a in out["apps"] if not a.get("ok")]
                   + ([] if out["relay"]["ok"] else [out["relay"]])
+                  + ([] if out["cdp_relay"]["ok"] else [out["cdp_relay"]])
                   + ([] if out["compose"]["ok"] else [out["compose"]]))
         out["ok"] = not failed
         out["failedSteps"] = [{"step": f.get("step", "?"), "reason": f.get("reason")}

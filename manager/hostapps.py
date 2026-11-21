@@ -1198,10 +1198,26 @@ def launch(desktop_id: str, app_id: str, cdp: bool = False, url: str | None = No
         out["reason"] = "窗口归属未确认（不登记 window 字段、不 focus）: " + str(win.get("reason"))
     if cdp:
         out["cdp"] = read_cdp_endpoint(desktop_id, app_id, spawn_time=spawn_time)
+        # CDP 外发 relay（config.WT_KASM_CDP_RELAY_PORT != 0 才启用）：在端口回读成功
+        # **之后**起，转发目标 = 本轮读到的 loopback 随机端口。relay 起不来只降级
+        # data.cdp.relay.ok=false + reason ⇒ app 本身仍算拉起成功（root 契约）。
+        if out["cdp"].get("ok"):
+            out["cdp"]["relay"] = net.ensure_cdp_relay(desktop_id, int(out["cdp"]["port"]))
+        else:
+            out["cdp"]["relay"] = net.cdp_relay_info(
+                desktop_id, False, "CDP 端口未回读 ⇒ relay 未起")
     return out
 
 
 def stop_app(desktop_id: str, app_id: str) -> dict:
+    """停 app：先停该桌 CDP relay（Chrome 端口随进程消失，relay 留着就是死转发 +
+    占着对外端口），再按台账精确 kill app 本体。"""
+    if process.read_ledger(net.cdp_relay_pidfile(desktop_id)):
+        cr_ok, cr_why = net.stop_cdp_relay(desktop_id)
+        if not cr_ok:
+            return {"ok": False, "desktop": desktop_id, "appId": app_id,
+                    "reason": "CDP relay 未停干净（app 未动，先人工处理 relay）: " + str(cr_why),
+                    "step": "cdp-relay"}
     ok, why = process.stop_ledger(app_pidfile(desktop_id, app_id))
     return {"ok": ok, "desktop": desktop_id, "appId": app_id, "reason": why}
 

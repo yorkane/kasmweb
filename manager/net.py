@@ -1,4 +1,4 @@
-"""端口锁 + 占用检查 + socat X11 relay + backend readiness。
+"""端口锁 + 占用检查 + socat X11 relay + CDP relay（宿主 DevTools 外发）+ backend readiness。
 
 锁约定（跨路线共享）：/data/tmp/webtop-channel-port-locks/port-<P>.lock
 流程 = flock 独占 → precheck（ss 全状态监听 + docker 全状态 host port 绑定）
@@ -21,6 +21,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import time
 
 from . import appshare, config, process
@@ -241,4 +242,128 @@ def ensure_relay(spec: config.DesktopSpec, force: bool = False) -> dict:
 
 def stop_relay(desktop_id: str) -> tuple[bool, str]:
     return process.stop_ledger(relay_pidfile(desktop_id))
+
+
+# ============================================================ CDP relay（宿主 Chrome DevTools 外发）
+#
+# 现状：宿主 Chrome 的 CDP 只绑 127.0.0.1:<随机端口>（--remote-debugging-port=0），
+# 外部不可达。启用条件 = config.WT_KASM_CDP_RELAY_PORT != 0（导入期 fail-closed：
+# 非 loopback 绑定必须配 token，见 config.py CDP_RELAY_* 块）。
+# 形态与 socat X relay 同款：setsid 独立进程 + pidfile + 端口锁目录，
+# 生命周期挂 app 启动链（--test-cdp 成功回读端口之后）与停 app / 停桌。
+
+def cdp_relay_pidfile(desktop_id: str) -> str:
+    return config.pidfile(desktop_id, "cdp-relay")
+
+
+def cdp_relay_running(desktop_id: str) -> dict | None:
+    return process.live_ledger(cdp_relay_pidfile(desktop_id))
+
+
+def cdp_relay_public_url(bind: str, port: int, token: str) -> str:
+    """url 形态 = http://<bind>:<port>/<token>（token 为空则不带路径；0.0.0.0 展示成 <host-ip> 占位）。"""
+    host = "<host-ip>" if bind == "0.0.0.0" else bind
+    base = "http://%s:%d" % (host, int(port))
+    return base + ("/" + token if token else "/")
+
+
+def cdp_relay_info(desktop_id: str, ok: bool, reason: str | None = None) -> dict:
+    """回复用摘要（进 data.cdp.relay）。enabled/bind/port/token_required 取配置生效值。"""
+    info = {"enabled": bool(config.cdp_relay_enabled()),
+            "bind": config.CDP_RELAY_BIND,
+            "port": int(config.CDP_RELAY_PORT),
+            "url": (cdp_relay_public_url(config.CDP_RELAY_BIND, config.CDP_RELAY_PORT,
+                                         config.CDP_RELAY_TOKEN)
+                    if config.cdp_relay_enabled() else ""),
+            "token_required": bool(config.CDP_RELAY_TOKEN),
+            "ok": bool(ok)}
+    if reason:
+        info["reason"] = str(reason)
+    return info
+
+
+def _cdp_relay_port_free(port: int) -> tuple[bool, str]:
+    """CDP relay 专用端口预检 = 只看**监听态**（LISTEN / SYN-RECV）。
+
+    通用 port_free 数全状态（含 TIME-WAIT）：relay 被 kill 后，上一轮客户端连接在
+    监听口上留 TIME-WAIT 记录 ⇒ 快速「stop app → start app」会被自己刚死的连接挡住。
+    重启绑定带 SO_REUSEADDR（cdprelay.serve），TIME-WAIT 不影响 bind ⇒ 监听态判定
+    即足够；docker host port 预留与本口无关（relay 不是容器），不查。
+    """
+    hits = [h for h in listening_sockets(port)
+            if h["state"] in ("LISTEN", "SYN-RECV")]
+    if hits:
+        return (False, "本机监听命中: " + ", ".join("%s %s" % (h["state"], h["local"])
+                                                    for h in hits[:4]))
+    return (True, "free")
+
+
+def ensure_cdp_relay(desktop_id: str, cdp_port: int, force: bool = False) -> dict:
+    """起 CDP relay（python3 -m manager.cdprelay → 127.0.0.1:<cdp_port>）。
+
+    未启用（WT_KASM_CDP_RELAY_PORT=0）⇒ {enabled:false, ok:true}（现网行为逐字节不变）。
+    端口占用 / 起不来 ⇒ ok=false + reason（**不影响 app 本身**，调用方只透传）。
+    已活 + upstream 端口一致 ⇒ kept（幂等）；端口变了 ⇒ 先停旧再起新（Chrome 重启换
+    随机端口是常态）。
+    """
+    if not config.cdp_relay_enabled():
+        return cdp_relay_info(desktop_id, True)
+    pidfile = cdp_relay_pidfile(desktop_id)
+    port = int(config.CDP_RELAY_PORT)
+    live = cdp_relay_running(desktop_id)
+    if live and not force:
+        if int(live.get("upstream_port") or -1) == int(cdp_port):
+            info = cdp_relay_info(desktop_id, True)
+            info["action"] = "kept"
+            info["pid"] = live["pid"]
+            return info
+        process.stop_ledger(pidfile)
+        live = None
+    if live and force:
+        process.stop_ledger(pidfile)
+    with port_lock(port):
+        ok, why = _cdp_relay_port_free(port)
+        if not ok:
+            return cdp_relay_info(desktop_id, False, "relay 端口 %d 被占: %s" % (port, why))
+        # 不做 selfcheck_bind（socat 线口径）：该探针用**无 SO_REUSEADDR 的 127.0.0.1**
+        # 试 bind，会被上一轮 relay 的客户端 TIME-WAIT 挡住（假占用，实测
+        # "bind 自证失败 [Errno 98]"）；真 relay 以 SO_REUSEADDR + 配置 bind 起，
+        # bind 自证 = 进程存活 + 下方 tcp_ready，失败照样回收台账。
+        argv = [sys.executable, "-m", "manager.cdprelay",
+                "--bind", config.CDP_RELAY_BIND,
+                "--port", str(port),
+                "--upstream", "127.0.0.1:%d" % int(cdp_port)]
+        if config.CDP_RELAY_TOKEN:
+            argv += ["--token", config.CDP_RELAY_TOKEN]
+        label = "wt-kasm-cdp-relay-%s" % desktop_id
+        try:
+            rec = process.spawn_registered(
+                argv, "cdp-relay", desktop_id, pidfile, label=label,
+                log_path=os.path.join(config.LOG_DIR, "cdp-relay-%s.log" % desktop_id),
+                env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+                     "HOME": config.APP_ROOT,
+                     "PYTHONPATH": os.path.dirname(os.path.dirname(
+                         os.path.abspath(__file__)))},
+                extra={"port": port, "bind": config.CDP_RELAY_BIND,
+                       "upstream_port": int(cdp_port)})
+        except (OSError, RuntimeError, ValueError) as exc:
+            return cdp_relay_info(desktop_id, False, "relay 拉起失败: %r" % (exc,))
+        time.sleep(0.6)
+        if not process.proc_exists(rec["pid"]):
+            process.stop_ledger(pidfile)
+            return cdp_relay_info(desktop_id, False,
+                                  "relay 启动即退出，见 logs/cdp-relay-%s.log" % desktop_id)
+        if not tcp_ready(port, timeout=2.0):
+            process.stop_ledger(pidfile)
+            return cdp_relay_info(desktop_id, False,
+                                  "relay bind 自证失败 port=%d（台账已回收）" % port)
+        info = cdp_relay_info(desktop_id, True)
+        info["action"] = "started"
+        info["pid"] = rec["pid"]
+        return info
+
+
+def stop_cdp_relay(desktop_id: str) -> tuple[bool, str]:
+    """按 pidfile 四元组精确 kill（禁 pkill）；无台账 = 成功。"""
+    return process.stop_ledger(cdp_relay_pidfile(desktop_id))
 

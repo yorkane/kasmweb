@@ -6,6 +6,7 @@
 #   https-cert-mount  证书由挂载文件提供（握手成功 + 证书身份可核）
 #   cdp-connect      宿主 Chrome 的 CDP 端点可连（--test-cdp → /json/version）
 #   cdp-relay        CDP 端点在宿主 loopback、不进容器、三处端口一致
+#   cdp-relay-bind   CDP relay 绑 0.0.0.0 + token 门（跨主机可达 / 404 / fail-closed 负例）
 #   dir-mount        三个 bind（x11 / appshare / config）双向可见 + 缺 appshare ⇒ 容器起不来
 #   two-level-path   桌面在二级目录 /desktop/<id>/ 下全通（页面 / 注入件 / websockify / 404 边界）
 #   regression       deploy.md §11 的可自动化项（healthz / 规范 302 / 参数矩阵 / 后端 200 /
@@ -137,6 +138,16 @@ cleanup() {
       kill "${pid}" 2>/dev/null || true
     done
   fi
+  # CDP relay 是 setsid 独立进程，命令行不含 rig 路径 ⇒ 上面扫不到；按 pidfile 精确收：
+  # 台账 pid + 现场 cmdline 必须含 manager.cdprelay 才 kill（零模式匹配杀）。
+  local cpf cpid
+  cpf="${APP_ROOT}/state/${DESK_ID}/cdp-relay.pid"
+  if [ -f "${cpf}" ]; then
+    cpid=$(json_field "$(cat "${cpf}" 2>/dev/null || echo '{}')" 'd.get("pid","")' | tr -d ' ')
+    if [ -n "${cpid}" ] && [ -d "/proc/${cpid}" ] && tr '\0' ' ' < "/proc/${cpid}/cmdline" 2>/dev/null | grep -q 'manager[.]cdprelay'; then
+      kill "${cpid}" 2>/dev/null || true
+    fi
+  fi
   for pid in "${PROXY_PID}" "${DISP_PID}" "${MGR_PID}"; do
     [ -n "${pid}" ] || continue
     kill "${pid}" 2>/dev/null || true
@@ -178,7 +189,11 @@ DESK_PORT=$(pick_port 25321 25329 25326) || { echo "FATAL 25321..25329 无空闲
 RELAY_PORT=$(pick_port 6401 6499 6401) || { echo "FATAL 6401..6499 无空闲端口" >&2; exit 2; }
 DISPATCHER_PORT=$(pick_port 25400 25440 25410) || { echo "FATAL 25400..25440 无空闲端口" >&2; exit 2; }
 PROXY_PORT=$(pick_port 25450 25499 25460) || { echo "FATAL 25450..25499 无空闲端口" >&2; exit 2; }
-say "端口：desk=${DESK_PORT} relay=${RELAY_PORT} dispatcher=${DISPATCHER_PORT} proxy=${PROXY_PORT}"
+# CDP relay 外发端口（0.0.0.0 绑定）用 6501..6599：避开生产 relay 6310-6312、
+# 25880 验证台 rig 的 6313/6314，也避开本套件 X relay 的 6401..6499。
+CDP_RELAY_PORT=$(pick_port 6501 6599 6501) || { echo "FATAL 6501..6599 无空闲端口" >&2; exit 2; }
+CDP_RELAY_TOKEN="acc$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+say "端口：desk=${DESK_PORT} relay=${RELAY_PORT} cdp-relay=${CDP_RELAY_PORT} dispatcher=${DISPATCHER_PORT} proxy=${PROXY_PORT}"
 
 mkdir -p "${RIG}/certs" "${RIG}/trash"
 
@@ -213,6 +228,10 @@ export WT_KASM_PUID="$(id -u)"
 export WT_KASM_PGID="$(id -g)"
 export WT_KASM_PUBLIC_ORIGIN="http://127.0.0.1:${DISPATCHER_PORT}"
 export WT_KASM_PROJECT_SUFFIX=-kwtacc
+# CDP relay：0.0.0.0 + 随机 token（config 导入期 fail-closed 要求非 loopback 必配 token）。
+export WT_KASM_CDP_RELAY_BIND=0.0.0.0
+export WT_KASM_CDP_RELAY_PORT="${CDP_RELAY_PORT}"
+export WT_KASM_CDP_RELAY_TOKEN="${CDP_RELAY_TOKEN}"
 if [ -n "${CHROME_VER}" ]; then
   export WT_KASM_CHROME_BIN="${CHROME_BIN}"
   export WT_KASM_CHROME_VERSION="${CHROME_VER}"
@@ -367,17 +386,24 @@ if want https-cert-mount; then
   fi
 fi
 
-CDP_PORT=""; CDP_URL=""; CDP_WS=""
-if want cdp-connect || want cdp-relay; then
+CDP_PORT=""; CDP_URL=""; CDP_WS=""; CDP_RELAY_JSON=""
+if want cdp-connect || want cdp-relay || want cdp-relay-bind; then
   if [ -z "${CHROME_VER}" ]; then
     record SKIP cdp-connect "本机无宿主 chromium（WTKASM_CHROME_BIN 默认路径不存在）"
     record SKIP cdp-relay "同上"
+    record SKIP cdp-relay-bind "同上"
   else
     out=""
     for attempt in 1 2; do
       out=$(cd "${REPO_DIR}" && python3 -m manager.cli app start "${DESK_ID}" --app chrome --test-cdp 2>&1 || true)
       CDP_PORT=$(json_field "${out}" 'd["data"]["cdp"]["port"]' | tr -d ' ' || true)
       CDP_URL=$(json_field "${out}" 'd["data"]["cdp"]["url"]' | tr -d ' ' || true)
+      CDP_RELAY_JSON=$(printf '%s' "${out}" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    print(json.dumps(d["data"]["cdp"].get("relay", {}), ensure_ascii=False))
+except Exception:
+    print("{}")' 2>/dev/null || echo "{}")
       case "${CDP_PORT}" in ""|ERR*) ;; *) break;; esac
       # 宿主 Chrome 起窗有毫秒级竞态（窗口归属未确认 ⇒ 拉起失败）：重试一次
       [ "${attempt}" = "1" ] && sleep 4
@@ -387,6 +413,7 @@ if want cdp-connect || want cdp-relay; then
       why=$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-200)
       if want cdp-connect; then record FAIL cdp-connect "app start --test-cdp 未回读端口（输出：${why}）"; fi
       if want cdp-relay; then record FAIL cdp-relay "同上"; fi
+      if want cdp-relay-bind; then record FAIL cdp-relay-bind "同上（未回读 CDP 端口 ⇒ 无从起 relay）"; fi
       ;;
     *)
       ver_json=$(curl -s --max-time 8 "http://127.0.0.1:${CDP_PORT}/json/version" 2>/dev/null || echo "")
@@ -411,6 +438,46 @@ except Exception:
           record PASS cdp-relay "CDP 端口仅宿主 loopback（${listen}），容器内不可达（${in_container}）⇒ 未外泄"
         else
           record FAIL cdp-relay "listen=[${listen}] 期望 127.0.0.1:${CDP_PORT}；容器内探测=${in_container} 期望 000"
+        fi
+      fi
+      if want cdp-relay-bind; then
+        r_ok=$(json_field "${CDP_RELAY_JSON}" 'd.get("ok")')
+        r_bind=$(json_field "${CDP_RELAY_JSON}" 'd.get("bind")')
+        r_ena=$(json_field "${CDP_RELAY_JSON}" 'd.get("enabled")')
+        r_treq=$(json_field "${CDP_RELAY_JSON}" 'd.get("token_required")')
+        r_url=$(json_field "${CDP_RELAY_JSON}" 'd.get("url")')
+        r_reason=$(json_field "${CDP_RELAY_JSON}" 'd.get("reason","")')
+        r_listen=$(ss -ltnH "sport = :${CDP_RELAY_PORT}" 2>/dev/null | awk '{print $4}' | head -1 | tr -d ' ' || true)
+        HOST_IP=$(docker network inspect bridge -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null | tr -d ' ' || true)
+        cont_code=$(docker exec "${CONTAINER}" sh -c "curl -s -m 5 -o /dev/null -w '%{http_code}' http://${HOST_IP}:${CDP_RELAY_PORT}/${CDP_RELAY_TOKEN}/json/version" 2>/dev/null | head -1 | tr -d ' ' || true)
+        cont_body=$(docker exec "${CONTAINER}" sh -c "curl -s -m 5 http://${HOST_IP}:${CDP_RELAY_PORT}/${CDP_RELAY_TOKEN}/json/version" 2>/dev/null || true)
+        cont_noauth=$(docker exec "${CONTAINER}" sh -c "curl -s -m 5 -o /dev/null -w '%{http_code}' http://${HOST_IP}:${CDP_RELAY_PORT}/json/version" 2>/dev/null | head -1 | tr -d ' ' || true)
+        ok=1; why=""
+        [ "${r_ena}" = "True" ] || { ok=0; why="${why}enabled=${r_ena} "; }
+        [ "${r_ok}" = "True" ] || { ok=0; why="${why}relay.ok=${r_ok}(reason=${r_reason}) "; }
+        [ "${r_bind}" = "0.0.0.0" ] || { ok=0; why="${why}bind=${r_bind} "; }
+        [ "${r_treq}" = "True" ] || { ok=0; why="${why}token_required=${r_treq} "; }
+        case "${r_url}" in *":${CDP_RELAY_PORT}/${CDP_RELAY_TOKEN}"*) ;; *) ok=0; why="${why}url=[${r_url}] ";; esac
+        [ "${r_listen}" = "0.0.0.0:${CDP_RELAY_PORT}" ] || { ok=0; why="${why}ss=[${r_listen}] 期望 0.0.0.0:${CDP_RELAY_PORT} "; }
+        [ "${cont_code}" = "200" ] || { ok=0; why="${why}容器带 token=${cont_code} 期望 200 "; }
+        case "${cont_body}" in *webSocketDebuggerUrl*) ;; *) ok=0; why="${why}容器响应缺 webSocketDebuggerUrl ";; esac
+        [ "${cont_noauth}" = "404" ] || { ok=0; why="${why}容器不带 token=${cont_noauth} 期望 404 "; }
+        [ "${listen}" = "127.0.0.1:${CDP_PORT}" ] || { ok=0; why="${why}原始 CDP 端口 listen=[${listen}] 期望 127.0.0.1:${CDP_PORT} "; }
+        NEG_PORT=$((CDP_RELAY_PORT + 50))
+        neg_rc=0
+        neg_out=$(cd "${REPO_DIR}" && env -u WT_KASM_CDP_RELAY_TOKEN WT_KASM_CDP_RELAY_BIND=0.0.0.0 WT_KASM_CDP_RELAY_PORT="${NEG_PORT}" python3 -m manager.cli daemon --foreground 2>&1) || neg_rc=$?
+        printf '%s\n' "${neg_out}" > "${RIG}/cdp-relay-negative.log"
+        [ "${neg_rc}" != "0" ] || { ok=0; why="${why}负例退出码=${neg_rc} 期望非零 "; }
+        case "${neg_out}" in *WT_KASM_CDP_RELAY_TOKEN*) ;; *) ok=0; why="${why}负例报错缺 WT_KASM_CDP_RELAY_TOKEN 字样 ";; esac
+        for negpid in $(pgrep -f "manager.cli daemon" 2>/dev/null || true); do
+          if tr '\0' '\n' < "/proc/${negpid}/environ" 2>/dev/null | grep -qx "WT_KASM_CDP_RELAY_PORT=${NEG_PORT}"; then
+            kill "${negpid}" 2>/dev/null || true
+          fi
+        done
+        if [ "${ok}" = "1" ]; then
+          record PASS cdp-relay-bind "relay 绑 0.0.0.0:${CDP_RELAY_PORT}（回复 bind=0.0.0.0 ok=true url 带 token）；容器经 ${HOST_IP} 带 token=200 含 webSocketDebuggerUrl、无 token=404；原始 CDP 端口仍只绑 127.0.0.1:${CDP_PORT}；fail-closed 负例启动即拒 rc=${neg_rc}"
+        else
+          record FAIL cdp-relay-bind "${why}"
         fi
       fi
       ;;

@@ -578,6 +578,126 @@ def _parse_chrome_version(env=None) -> str:
 CHROME_BIN = _parse_chrome_bin()
 CHROME_EXPECTED_VERSION = _parse_chrome_version()
 
+
+# ------------------------------------------------- CDP relay（宿主侧外发面，启动期 fail-closed）
+# 现状：宿主 Chrome 的 DevTools 端口由 --remote-debugging-address=127.0.0.1
+# --remote-debugging-port=0 拉起 ⇒ 只绑 loopback 随机端口，外部（含容器）不可达。
+# 本开关在这条端口前面加一个**宿主侧** relay，使其可按需绑 0.0.0.0 供跨主机接管。
+# 实现 = manager/cdprelay.py（纯标准库 HTTP+WS 转发）；生命周期 = manager/net.py
+# ensure_cdp_relay（setsid 独立进程 + pidfile + 同一套端口锁）。
+#
+# 三个 env（全部只在导入期读一次，无热重载，非法即抛 = fail-closed）：
+#   WT_KASM_CDP_RELAY_BIND   默认 127.0.0.1；只接受 127.0.0.1 / localhost / 0.0.0.0
+#   WT_KASM_CDP_RELAY_PORT   默认 0 = **不启用 relay**（现有行为逐字节不变）；0..65535
+#   WT_KASM_CDP_RELAY_TOKEN  默认空；**bind 非 loopback 且 token 为空 ⇒ 导入期抛错**
+#                            （DevTools = 浏览器完全控制权，裸 0.0.0.0 不可接受）
+CDP_RELAY_BIND_ENV = "WT_KASM_CDP_RELAY_BIND"
+CDP_RELAY_PORT_ENV = "WT_KASM_CDP_RELAY_PORT"
+CDP_RELAY_TOKEN_ENV = "WT_KASM_CDP_RELAY_TOKEN"
+CDP_RELAY_BIND_DEFAULT = "127.0.0.1"
+CDP_RELAY_BINDS = ("127.0.0.1", "localhost", "0.0.0.0")
+CDP_RELAY_LOOPBACK_BINDS = ("127.0.0.1", "localhost")
+CDP_RELAY_TOKEN_MAX = 128
+CDP_RELAY_TOKEN_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+
+
+def _parse_cdp_relay_bind(env=None) -> str:
+    """解析 WT_KASM_CDP_RELAY_BIND -> 生效 bind。白名单外一律抛 ValueError（不 trim、不猜）。"""
+    mapping = os.environ if env is None else env
+    if not hasattr(mapping, "get"):
+        raise TypeError("env 必须是映射，实为 %s" % type(mapping).__name__)
+    raw = mapping.get(CDP_RELAY_BIND_ENV)
+    if raw is None:
+        return CDP_RELAY_BIND_DEFAULT
+    if type(raw) is not str:
+        raise ValueError("%s 必须是 str，实为 %s: %r"
+                         % (CDP_RELAY_BIND_ENV, type(raw).__name__, raw))
+    if raw not in CDP_RELAY_BINDS:
+        raise ValueError("%s 只允许 %s（其它值 = 启动即拒，不猜网卡名 / 不接具体 IP）: %r"
+                         % (CDP_RELAY_BIND_ENV, " / ".join(CDP_RELAY_BINDS), raw))
+    return raw
+
+
+def _parse_cdp_relay_port(env=None) -> int:
+    """解析 WT_KASM_CDP_RELAY_PORT -> int 端口。0 = 不启用。bool / 负数 / 越界 / 前导零一律抛。"""
+    mapping = os.environ if env is None else env
+    if not hasattr(mapping, "get"):
+        raise TypeError("env 必须是映射，实为 %s" % type(mapping).__name__)
+    raw = mapping.get(CDP_RELAY_PORT_ENV)
+    if raw is None:
+        return 0
+    if isinstance(raw, bool) or type(raw) is not str:
+        raise ValueError("%s 必须是数字字符串，实为 %s: %r"
+                         % (CDP_RELAY_PORT_ENV, type(raw).__name__, raw))
+    if raw != raw.strip() or not raw:
+        raise ValueError("%s 含前后空白或为空（不 trim、不猜）: %r" % (CDP_RELAY_PORT_ENV, raw))
+    if not raw.isascii() or not raw.isdigit():
+        raise ValueError("%s 必须是十进制整数（0..65535，0 = 不启用）: %r"
+                         % (CDP_RELAY_PORT_ENV, raw))
+    if len(raw) > 1 and raw[0] == "0":
+        raise ValueError("%s 端口不得带前导零: %r" % (CDP_RELAY_PORT_ENV, raw))
+    port = int(raw)
+    if port > 65535:
+        raise ValueError("%s 端口 %d 越界 0..65535: %r" % (CDP_RELAY_PORT_ENV, port, raw))
+    return port
+
+
+def _parse_cdp_relay_token(env=None) -> str:
+    """解析 WT_KASM_CDP_RELAY_TOKEN -> token 串（未设置 / 空串 = 空 = 不带 token 门）。
+
+    形态 = URL 路径段安全集：首尾字母数字，中间允许 . _ -，长度 1..128。禁用 '/' 与
+    空白（token 直接拼进 URL 路径与 --token 参数）。
+    """
+    mapping = os.environ if env is None else env
+    if not hasattr(mapping, "get"):
+        raise TypeError("env 必须是映射，实为 %s" % type(mapping).__name__)
+    raw = mapping.get(CDP_RELAY_TOKEN_ENV)
+    if raw is None:
+        return ""
+    if type(raw) is not str:
+        raise ValueError("%s 必须是 str，实为 %s: %r"
+                         % (CDP_RELAY_TOKEN_ENV, type(raw).__name__, raw))
+    if raw == "":
+        return ""
+    if CDP_RELAY_TOKEN_RE.match(raw) is None:
+        raise ValueError("%s 形态非法（要求 %s，长度 1..%d，禁 '/' / 空白 / 控制字符）: %r"
+                         % (CDP_RELAY_TOKEN_ENV, CDP_RELAY_TOKEN_RE.pattern,
+                            CDP_RELAY_TOKEN_MAX, raw[:40]))
+    return raw
+
+
+def _assert_cdp_relay_token_required_for_public_bind(bind: str, token: str, env=None) -> None:
+    """非 loopback 绑定必须配 token（导入期 fail-closed，启动即拒）。
+
+    理由 = CDP 等价于浏览器完全控制权（读会话、发请求、以用户身份操作）。
+    只对**已启用**（port != 0）的组合判定；bind=0.0.0.0 + port=0 仍是"未启用"，
+    与现网逐字节一致，不新增约束。
+    """
+    mapping = os.environ if env is None else env
+    if mapping.get(CDP_RELAY_PORT_ENV) is None:
+        return                                   # 未启用 relay（port 默认 0）
+    if bind in CDP_RELAY_LOOPBACK_BINDS:
+        return
+    if token:
+        return
+    raise ValueError(
+        "%s=%s 是非 loopback 绑定 ⇒ 必须配 %s（CDP = 浏览器完全控制权，"
+        "无 token 的外发面启动即拒；只在本机用请改 %s=%s）"
+        % (CDP_RELAY_BIND_ENV, bind, CDP_RELAY_TOKEN_ENV,
+           CDP_RELAY_BIND_ENV, CDP_RELAY_BIND_DEFAULT))
+
+
+CDP_RELAY_BIND = _parse_cdp_relay_bind()
+CDP_RELAY_PORT = _parse_cdp_relay_port()
+CDP_RELAY_TOKEN = _parse_cdp_relay_token()
+_assert_cdp_relay_token_required_for_public_bind(CDP_RELAY_BIND, CDP_RELAY_TOKEN)
+
+
+def cdp_relay_enabled() -> bool:
+    """relay 是否启用 = port != 0（单一判据；消费侧只读本函数与下方三个生效值）。"""
+    return int(CDP_RELAY_PORT) > 0
+
+
 FRAME_WIDTH = 1600
 FRAME_HEIGHT = 900
 FRAME_RATE = 30

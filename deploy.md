@@ -406,6 +406,9 @@ manager 侧（全部只在模块导入期读一次，无热重载；非法即抛
 | `WT_KASM_EASYCONNECT` | 未设置 = 不注册 | opt-in 第三宿主应用（固定二进制 + 两个固定旗标，仅 `chrome-1`） | `config.py:721-724,1089-1172` |
 | `WT_KASM_IMAGE_ATTEST` | `<APP_ROOT>/image-attest.json` | 几何实况认证文件路径 | `manager/attest.py:50-51,89-102` |
 | `WT_KASM_VCMI_SRC_DATA` / `WT_KASM_VCMI_SRC_CONFIG` | `/home/aigc/.local/share/vcmi` / `/home/aigc/.config/vcmi` | VCMI 种子源双通道；**公开机自建 VCMI 数据源时设置**（空值回落默认） | `config.py:729-730` |
+| `WT_KASM_CDP_RELAY_BIND` | `127.0.0.1` | CDP relay 监听地址；只接受 `127.0.0.1` / `localhost` / `0.0.0.0`，其它值导入期抛错（语义与安全口径见 §6.6） | `config.py` CDP_RELAY_* 块 |
+| `WT_KASM_CDP_RELAY_PORT` | `0`（不启用） | CDP relay 端口 0..65535；**0 = 不启用**，现有行为逐字节不变 | 同上 |
+| `WT_KASM_CDP_RELAY_TOKEN` | 空 | relay 路径前缀 token；**bind 非 loopback 且 token 空 ⇒ 启动即拒**（fail-closed） | 同上 |
 | `WT_KASM_PYTHON` | `python3` | `wt-kasm` 用的解释器 | `scripts/wt-kasm:10` |
 | `WT_KASM_MARK` | — | manager 注入子进程的私有归属标记（killpg 证据） | `manager/process.py:24,117-120` |
 
@@ -581,6 +584,69 @@ Chrome profile 的 `SingletonLock` 只回收**已确认死亡**的锁（移入 t
 **旧 /config 卷换新镜像的行为**：新图标**会**自动出现，部署侧无需手工步骤。机制在 `/defaults/autostart`：每次 openbox 启动对管理名单 {`Chrome`, `Chrome-Local`} 逐名 `cp -f`（覆盖式，非 `cp -n`）+ `chmod 0755`，与 `$HOME/Desktop` 既有内容无关 ⇒ 已有 Desktop 目录的老卷在换新镜像后的第一次启动就多出 `Chrome-Local.desktop`（同机制还会把旧的 0644 副本刷新成 0755）。要在**不重启会话**的情况下立刻见效，可手工执行同一动作：`cp -f /defaults/desktop/Chrome-Local.desktop ~/Desktop/ && chmod 0755 ~/Desktop/Chrome-Local.desktop`。
 
 **已知限制（容器内通道）**：112 是 Alpine 3.17 archive 仓库钉死的版本，比宿主 Chrome 153 旧约 41 个大版本（无新平台特性，安全补丁止于 archive 冻结点）；`--no-sandbox` 弱化渲染隔离；profile 落在 /config 卷上随桌持久（共桌即共享 profile，没有 manager 侧的私有 profile 隔离）；KasmVNC 无 GPU 加速，Chromium 走软件光栅（与宿主桥同条件）。构建门禁 = 版本逐字断言 + 真 headless 渲染 smoke（§4 门禁 10）。
+
+### 6.6 CDP relay：宿主 Chrome DevTools 的受控外发（2026-11-21 新增）
+
+宿主 Chrome 的调试端点默认**只绑 loopback 随机端口**（`--test-cdp` 用
+`--remote-debugging-address=127.0.0.1 --remote-debugging-port=0`，端口从 profile 的
+`DevToolsActivePort` 回读，`hostapps.read_cdp_endpoint`）⇒ 跨机 / 容器内都不可达。
+CDP relay 在这条端口前面加一个**宿主侧**转发进程（`manager/cdprelay.py`，纯标准库），
+让它可按需绑 `0.0.0.0` 供跨主机接管。Chrome 在宿主、端口是回环随机值 ⇒ relay 必须跑在
+宿主侧、由 manager 按本轮读到的端口拉起（形态与 X 通道 socat relay 同款：setsid 独立
+进程 + pidfile + `PORT_LOCK_DIR` 端口锁）。
+
+| env | 默认 | 语义 | 出处 |
+|---|---|---|---|
+| `WT_KASM_CDP_RELAY_BIND` | `127.0.0.1` | 只接受 `127.0.0.1` / `localhost` / `0.0.0.0`；其它值**导入期抛错**（不猜网卡名 / 不接具体 IP） | `manager/config.py` CDP_RELAY_* 块 |
+| `WT_KASM_CDP_RELAY_PORT` | `0` | 0..65535；**0 = 不启用 relay**（现有行为逐字节不变） | 同上 |
+| `WT_KASM_CDP_RELAY_TOKEN` | 空 | 路径前缀 token；**bind 非 loopback 且 token 为空 ⇒ 启动即拒**（fail-closed） | 同上 |
+
+启动时机 = `app start --test-cdp` 且 CDP 端口回读成功**之后**（`hostapps.launch` →
+`net.ensure_cdp_relay`）。relay 起不来（端口被占 / bind 自证失败 / 拉起即退）**不影响
+app 本身**：app 仍算拉起成功，降级信息在回复 `data.cdp.relay = {enabled, bind, port,
+url, token_required, ok, reason?}`；`url` 形如 `http://<bind>:<port>/<token>`
+（token 为空则不带；`0.0.0.0` 显示成 `<host-ip>` 占位）。停止 = 停 app / 停桌按 pidfile
+`state/<desk>/cdp-relay.pid` 四元组精确 kill（禁 pkill；relay 台账死了 Chrome 端口也随
+进程消失，留着 relay 只会死转发 + 白占对外端口，所以 stop_app 先收 relay）。
+
+**认证与改写行为**（照 wdev 线 webtop-cdp / wdev-cdp-proxy 的已验证语义）：
+
+- token 非空时，请求路径必须逐字等于 `/<token>` 或以 `/<token>/` 开头，否则 **404**
+  （不是 401 —— 探测面最小）。转发前剥掉 `/<token>` 前缀。
+- 上游请求**强设** `Host: 127.0.0.1:<cdp 端口>`（Chrome 按请求 Host 自述
+  `webSocketDebuggerUrl`）；响应只对 `/json*` 且 200 的正文做整串替换：
+  `ws://127.0.0.1:<port>/…` → `ws://<请求 Host>/<token>/…`（TLS 上下文用 `wss://`，
+  见下方后续项）。客户端拿到的 WS URL 自带 token，Playwright 零二次配置。
+- `Upgrade: websocket` ⇒ hijack：向上游重发已剥前缀的请求行 + 原 headers（含
+  `Connection: Upgrade`），随后双向字节泵；WS 请求的 `Origin` 重写为上游自述 Origin
+  （relay 自身无 TLS，不伪造 https Origin）。
+
+**安全口径（必读）**：
+
+- DevTools 等价于**浏览器完全控制权**（读会话、发请求、以用户身份操作）⇒ **token 视同
+  密钥**。非 loopback 绑定必须配 token：config 导入期 fail-closed（报错文案点名
+  `WT_KASM_CDP_RELAY_TOKEN`），`manager.cdprelay` 启动期二次断言。
+- token 出现在 URL 路径 ⇒ **会进上游 access log**；relay 自身日志**绝不打印 token**
+  （请求行记成 `/<token>/json/version` 形态）。对日志敏感的部署把 access log 一并纳入
+  脱敏范围。
+- 本期**明文监听（无 TLS）**：只解决「能绑 0.0.0.0 + token 门」。TLS 门面（wss 改写
+  自动生效 + 证书挂载）是后续项；fleet 的边缘 TLS 惯例在 APISIX/authz，跨公网用
+  relay 时应在前面压 TLS 终结的网关，不把明文 0.0.0.0 直接裸露公网。
+- 404 语义与业务 404 不可区分（token 门的已知短板，照抄参考实现口径）。
+
+**自检命令**（rig 起 manager 时注入三个 env，relay 端口用 6501..6599 段）：
+
+```bash
+scripts/release-acceptance.sh --case cdp-relay-bind --keep
+```
+
+断言链：回复 `relay.ok=true` 且 `bind=0.0.0.0` → `ss` 见 `0.0.0.0:<port>` 在听 →
+**容器内**经 docker bridge 网关访问 `http://<host-ip>:<port>/<token>/json/version`
+= 200 且含 `webSocketDebuggerUrl`（跨主机可达）→ 同 URL 不带 token = 404 →
+原始 Chrome CDP 端口仍只绑 `127.0.0.1`（外泄面只有 relay 一个）→ 负例：
+`WT_KASM_CDP_RELAY_BIND=0.0.0.0` 无 token 起 manager = 启动即拒（非零退出 + 报错含
+token 字样）。`cdp-connect` / `cdp-relay` 两例语义不变（它们断言的原始端口只绑
+loopback 不因 relay 启用而改变）。
 
 ## 7. 桌面与任务栏
 
