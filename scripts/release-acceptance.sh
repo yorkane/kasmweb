@@ -106,6 +106,12 @@ for bin in docker node python3 curl ss; do
 done
 python3 -c 'import yaml' >/dev/null 2>&1 || {
   echo "FATAL  python3 缺 PyYAML（manager 依赖）" >&2; exit 2; }
+# manager 的端口锁目录硬编码在 /data/tmp（config.py:27）⇒ 宿主必须有可写的 /data/tmp
+if ! ( mkdir -p /data/tmp 2>/dev/null && [ -w /data/tmp ] ); then
+  echo "FATAL  /data/tmp 不可写（manager 端口锁目录硬编码于 /data/tmp/webtop-channel-port-locks）" >&2
+  echo "      CI 修法: sudo mkdir -p /data/tmp && sudo chmod 1777 /data/tmp" >&2
+  exit 2
+fi
 docker image inspect "${IMAGE}" >/dev/null 2>&1 || {
   echo "FATAL  被测镜像不存在: ${IMAGE}" >&2; exit 2; }
 
@@ -201,8 +207,10 @@ export WT_KASM_APP_ROOT="${APP_ROOT}"
 export WT_KASM_CATALOG_FILE="${RIG}/catalog.json"
 export WT_KASM_IMAGE="${IMAGE}"
 export WT_KASM_TRASH="${RIG}/trash"
-export WT_KASM_PUID=1000
-export WT_KASM_PGID=1000
+# PUID/PGID 取**当前执行用户**：容器 init 会按它改 /config 与 /run/wt-kasm-app 的属主，
+# 若与宿主用户不一致，宿主侧就读不到 appshare（CI runner 是 uid 1001 ≠ 1000）。
+export WT_KASM_PUID="$(id -u)"
+export WT_KASM_PGID="$(id -g)"
 export WT_KASM_PUBLIC_ORIGIN="http://127.0.0.1:${DISPATCHER_PORT}"
 export WT_KASM_PROJECT_SUFFIX=-kwtacc
 if [ -n "${CHROME_VER}" ]; then
@@ -415,8 +423,12 @@ if want dir-mount; then
   sock=$(docker exec "${CONTAINER}" sh -c 'ls /run/wt-kasm-app/launch.sock 2>/dev/null' 2>/dev/null || echo "")
   deskfiles=$(docker exec "${CONTAINER}" sh -c 'ls /config/Desktop 2>/dev/null | tr "\n" " "' 2>/dev/null || echo "")
   marker="${DESK_DIR}/config/.acc-mount-probe"
-  echo "probe-$(date -u +%s)" > "${marker}"
-  seen=$(docker exec "${CONTAINER}" sh -c 'cat /config/.acc-mount-probe 2>/dev/null' 2>/dev/null || echo "")
+  # 标记写在 x11 目录（1777，容器 init 不改它的属主）；config 目录会被容器按 PUID 改属主，
+  # 宿主未必写得进去（CI runner uid≠容器 uid）。
+  marker="${DESK_DIR}/runtime/x11/.acc-mount-probe"
+  echo "probe-$(date -u +%s)" > "${marker}" 2>/dev/null || true
+  seen=$(docker exec "${CONTAINER}" sh -c 'cat /tmp/.X11-unix/.acc-mount-probe 2>/dev/null' 2>/dev/null || echo "")
+  mountmap=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/tmp/.X11-unix"}}{{.Source}}{{end}}{{end}}' "${CONTAINER}" 2>/dev/null || echo "")
   NEG_CONTAINER="kasmweb-acc-neg-$$"
   docker run -d --name "${NEG_CONTAINER}" \
     -e WTK_DESKTOP_ID=${DESK_ID} -e DISPLAY=:1 -e PUID=1000 -e PGID=1000 \
@@ -432,7 +444,8 @@ if want dir-mount; then
   [ -n "${sock}" ] || { ok=0; why="${why}缺launch.sock "; }
   case "${deskfiles}" in *Chrome.desktop*) ;; *) ok=0; why="${why}桌面无Chrome.desktop ";; esac
   case "${deskfiles}" in *Chrome-Local.desktop*) ;; *) ok=0; why="${why}桌面无Chrome-Local.desktop ";; esac
-  [ "${seen}" = "$(cat "${marker}" 2>/dev/null)" ] || { ok=0; why="${why}宿主->容器标记不可见 "; }
+  [ "${seen}" = "$(cat "${marker}" 2>/dev/null)" ] || { ok=0; why="${why}宿主->容器标记不可见[seen=${seen}] "; }
+  [ "${mountmap}" = "${DESK_DIR}/runtime/x11" ] || { ok=0; why="${why}bind 映射不符[${mountmap}] "; }
   if [ "${neg_health}" = "healthy" ]; then
     ok=0; why="${why}缺 appshare 挂载的容器竟 healthy（契约破） "
   fi

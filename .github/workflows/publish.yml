@@ -53,6 +53,8 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y socat xdotool x11-utils xauth python3-yaml dbus
+          # manager 的端口锁目录硬编码在 /data/tmp（manager/config.py:27）
+          sudo mkdir -p /data/tmp && sudo chmod 1777 /data/tmp
 
       - name: Build image for the acceptance gate (no push)
         uses: docker/build-push-action@v6
