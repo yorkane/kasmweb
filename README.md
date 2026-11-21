@@ -43,6 +43,9 @@
 - **页面默认（KasmVNC 客户端）**：打开桌面即 **IME Input Mode 已开启**、控制栏弹出把手默认停靠
   **屏幕右侧**；由注入的 `wtk-boot.js` 对 `enable_ime` / `controlbar_pos` 做 seed-once 预置
   （用户在 Settings 里的开关 / 拖动把手的显式选择永远优先；构建门禁逐字断言，deploy.md §7.3）。
+- **发布前自检套件**：`scripts/release-acceptance.sh` 一条命令覆盖口令门面 / https 证书挂载 /
+  CDP 连接 / CDP relay 转发 / 目录挂载 / 二级目录访问 + §11 回归；CI 的 publish job 依赖
+  acceptance job，**套件不过就不发布**（用例矩阵与口径见 deploy.md §11.1）。
 - **最简音频** = 容器内 PulseAudio（app-share socket）→ ffmpeg MP2 → node relay →
   浏览器 jsmpeg，全链路无额外组件、无麦克风通道。
 - **分辨率不固定**：`-geometry` 只是启动初值（取 `WTK_WIDTH` / `WTK_HEIGHT`，

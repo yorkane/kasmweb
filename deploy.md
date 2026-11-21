@@ -1021,6 +1021,44 @@ playwright-cli eval "() => window.__wdevLayout && window.__wdevLayout.audit()"
 都只证明到 3 级（plumbing / 加载）。「桌面真的渲染出画面、任务栏按钮真的可点、
 声音真的能停」是 4 级，需浏览器侧取证，单列核销。
 
+### 11.1 发布前自检套件（`scripts/release-acceptance.sh`）
+
+把 §11 的手工清单自动化成**一条命令的门**，覆盖六个接入面场景；CI 的 `publish` job
+依赖 `acceptance` job，**套件不过就不发布**。
+
+```bash
+scripts/release-acceptance.sh --image ghcr.io/yorkane/kasmweb:latest   # 全套（发布宿主上跑）
+scripts/release-acceptance.sh --case cdp-connect --keep                # 只跑某几例 / 保留现场
+scripts/release-acceptance.sh --json-out /data/tmp/acc.json             # 机器可读摘要
+```
+
+| 用例 | 断言什么 | 缺前置时 |
+|---|---|---|
+| `password-login` | 带口令 + 证书的**上游门面**（TLS 终结 + Basic Auth）压在链路前时：未认证/错凭据 = 401 + `WWW-Authenticate`，正确凭据 = 规范 302；镜像侧 Xvnc 确为 `-SecurityTypes None -disableBasicAuth`；dispatcher 拒 `?password=` = 400 | 无 openssl / 代理未起 ⇒ SKIP |
+| `https-cert-mount` | TLS 握手成功，且**服务证书 = 挂载进来的那张**（sha256 指纹逐字一致） | 同上 |
+| `cdp-connect` | `app start --test-cdp` 回读 CDP 端口；`/json/version` 含 `webSocketDebuggerUrl`；`endpoint.txt` 与回复一致 | 本机无宿主 chromium ⇒ SKIP |
+| `cdp-relay` | CDP 端口只绑宿主 loopback、**容器内不可达**（未外泄），三处端口一致 | 同上 |
+| `dir-mount` | 三个 bind（x11 / appshare / config）双向可见；宿主→容器标记同步；**缺 appshare ⇒ 容器起不来**（镜像自带 fail-closed 门） | — |
+| `two-level-path` | 桌面在二级目录 `/desktop/<id>/` 下：规范 URL 200、注入件 200、裸路径 302 引导、一段 400 / 未知桌 404、后端直连 200；镜像级 `window.__WTK_BASE=/desktop/<id>/` | — |
+| `regression` | healthz / 规范 302（6 键）/ 参数矩阵 400-404 / 后端 200 / healthcheck OK / 字体 Noto Sans CJK SC / 容器内 Chromium 112 / manager `verify` | — |
+| `client-connect` | **4 级 GUI 判据**（KasmVNC 客户端真连上桌面）：默认不跑（仓库纪律：4 级单列核销）；设 `WTK_ACCEPT_BROWSER=<chrome>` 时开一次抽查 | 未设 ⇒ SKIP |
+
+**口径与边界（勿误读）**
+
+- **口令与 TLS 不在镜像内**：Xvnc 固定 `-SecurityTypes None -disableBasicAuth -sslOnly 0`，
+  认证与 TLS 终结归 authz 网关 / APISIX ⇒ 本套件验的是「门面在链路前时桌面入口仍完整可用」，
+  不是「镜像自带口令」。
+- **目录挂载**的契约 = manager 渲染 compose 的三个 bind；宿主数据目录挂进桌面**不在**契约内。
+- rig 全在 `mktemp -d`（默认 `/data/tmp`），端口避让生产（25320 / 25321-3 / 6310-2）与
+  25880 验证台（6313 / 6314）；结束后 rig 归档进 `/data/.trash`。
+- **native 镜像 + 声明几何 = 设计互斥**：catalog 桌强制声明几何，而 native 镜像没有几何活体链
+  （attest B/C/D 不闭合）⇒ manager 的发布面门判 `state=error`，dispatcher 照状态放行即 503。
+  故 rig 给 dispatcher 喂的是**从 manager registry 降级出的 legacy 形态**（去 `geometry` 键、
+  `state=running`；`id` / `port` / `containerId` / `generation` 全部取自 manager 写的条目）
+  —— 这正是生产上 native 镜像桌的真实形态（基线三桌即 legacy）。因此 `verify` 的
+  `registry 发布面字段合规` 一项必然失败，套件**只允许**这一类互斥失败项。
+- 退出码：任一 FAIL ⇒ 1；全 PASS/SKIP ⇒ 0。负控（拿基座镜像跑）实测 6 FAIL / rc=1。
+
 ## 12. 运维
 
 ### 12.1 升级
